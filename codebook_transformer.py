@@ -17,7 +17,7 @@ import torch_geometric.nn as pyg_nn
 import os
 import numpy as np
 from dataset import multitask_dataset
-from transformer import AirwayFormer_jump,AirwayFormer_hierarchy,AirwayFormer_dense,AirwayFormer_unidrop
+from transformer import AirwayFormer_jump,AirwayFormer_hierarchy,AirwayFormer_dense
 from loss_functions import LabelSmoothCrossEntropyLoss,DependenceLoss
 from utils import *
 torch.manual_seed(222) # cpu
@@ -28,7 +28,7 @@ import shutil
 import sys
 import pickle
 import matplotlib.pyplot as plt
-from transformer_edge import AirwayFormer_codebook
+from transformer_edge import AirwayFormer_codebook,AirwayFormer_codebook23
 
 def seg2lobor(y0):
     y = y0.copy()
@@ -58,9 +58,6 @@ def subseg2seg(y0,trachea):
     return y
 
 def subseg2seg(y0,trachea):
-    book=np.zeros(127)
-    book[0]=18
-
     y = y0.copy()
     for j in range(len(y)):
         if y[j] == 0:
@@ -69,8 +66,6 @@ def subseg2seg(y0,trachea):
             y[j] = (y[j]-1)//7
     y[trachea] = 19
     return y
-
-
 
 
 
@@ -100,7 +95,7 @@ test_loader_case = DataLoader(dataset2,batch_size = 1,shuffle = False, num_worke
 max_acc = 0
 #torch.set_default_dtype(torch.float64)
 
-save_dir = "checkpoints/dense_codebook_dictdrop0_transformer_6layer_dim128_heads4_hdim32_mlp256_postnorm_adam5e-4_eps_hierarchy222/"
+save_dir = "checkpoints/dense_true_codebook_dictdrop0_transformer_6layer_dim128_heads4_hdim32_mlp256_postnorm_adam5e-4_eps_hierarchy222/"
 if not os.path.exists(save_dir):
     os.makedirs(save_dir)
 logfile = os.path.join(save_dir,'log')
@@ -158,7 +153,6 @@ my_net = AirwayFormer_codebook(input_dim=23, num_classes1=6,num_classes2=20,num_
 #my_net = AirwayFormer_hierarchy(input_dim=23, num_classes1=6,num_classes2=20,num_classes3=127, dim=128, depth=2, heads=4, mlp_dim=256, dim_head=32,dropout=0.0)
 step_t = []#用于存放横坐标
 loss1_plt = []#用于存放train_loss
-loss2_plt = []#用于存放train_loss
 train_mean_loss=100
 
 
@@ -204,7 +198,6 @@ for epoch in range(epochs):
     test_consist3_2 = []
     test_consist3_1 = []'''
     train_loss1 = []
-    train_loss2 = []
     train_loss = []
     index_case = 0
 
@@ -224,6 +217,7 @@ for epoch in range(epochs):
     
         optimizer.zero_grad()
         output1,output2,output3 = my_net(x,torch.tensor(dict_list[index_case]).to(device))
+        #output1, output2, output3 = my_net(x)
 
 
 
@@ -232,14 +226,10 @@ for epoch in range(epochs):
         
         weights = case.weights.to(device) 
         loss_function = LabelSmoothCrossEntropyLoss(weight = weights, smoothing = 0.02)
-        d_loss = DependenceLoss(weight=None, reduction='mean', alpha = 0.01,p_loss1=1,p_loss2=2 )
-        loss1 = loss_function(output1, y_lobar) + loss_function(output2, y_seg) + loss_function(output3, y_subseg)
+        loss = loss_function(output1, y_lobar) + loss_function(output2, y_seg) + loss_function(output3, y_subseg)
 
-        #loss = loss_function(output1, y_lobar) + loss_function(output2, y_seg) + loss_function(output3, y_subseg)
-        loss2 = d_loss(output2,output3,y_seg,y_subseg,book)
-        loss2.requires_grad_(True)
 
-        loss = loss1
+
 
 
         for name, parms in my_net.named_parameters():
@@ -287,11 +277,8 @@ for epoch in range(epochs):
 
         tmp2 = np.tile(pred3_2.T,(pred3_2.shape[0],1))
         tmp1 = tmp2.T
-        #print(pred3.shape,tmp1.shape,tmp2.shape)
         dict_list[index_case] = np.abs(tmp1 - tmp2)
-        '''for i in range(dict.shape[0]):
-            for j in range(dict.shape[1]):
-                dict[i][j] = pred3[i]-pred3[j]'''
+
 
         '''con1_3 = consistence(pred1,pred3_1,label1) #wrong->right
         con2_3 = consistence(pred2,pred3_2,label2)
@@ -309,8 +296,6 @@ for epoch in range(epochs):
         train_accuracy3.append(acc3)
         train_accuracy3_1.append(acc3_1)
         train_accuracy3_2.append(acc3_2)
-        train_loss1.append(loss1.item())
-        train_loss2.append(loss2.item())
         train_loss.append(loss.item())
         for name, parms in my_net.named_parameters():
             assert not (torch.isnan(parms.grad.data).sum() > 0), ['back', "loss", loss, name, "parm", parms, "grad",
@@ -350,8 +335,6 @@ for epoch in range(epochs):
     train_accuracy3 = np.array(train_accuracy3)
     train_accuracy3_2 = np.array(train_accuracy3_2)
     train_accuracy3_1 = np.array(train_accuracy3_1)
-    train_loss1 = np.array(train_loss1)
-    train_loss2 = np.array(train_loss2)
     train_loss = np.array(train_loss)
     train_mean_acc1 = np.mean(train_accuracy1)
     train_mean_acc2 = np.mean(train_accuracy2)
@@ -359,8 +342,6 @@ for epoch in range(epochs):
     train_mean_acc3 = np.mean(train_accuracy3)
     train_mean_acc3_2 = np.mean(train_accuracy3_2)
     train_mean_acc3_1 = np.mean(train_accuracy3_1)
-    train_mean_loss1 = np.mean(train_loss1)
-    train_mean_loss2 = np.mean(train_loss2)
     train_mean_loss = np.mean(train_loss)
     '''train_consist1_3 = np.array(train_consist1_3)
     train_consist2_3 = np.array(train_consist2_3)
@@ -372,7 +353,7 @@ for epoch in range(epochs):
     con_mean_3_2 = np.mean(train_consist3_2)'''
 
     print(
-        "epoch:{},loss:{}，acc:{}, {}({}), {}({}，{})time:{}".format(epoch + 1, train_mean_loss1,
+        "epoch:{},loss:{}，acc:{}, {}({}), {}({}，{})time:{}".format(epoch + 1, train_mean_loss,
                                                                                             train_mean_acc1,
                                                                                             train_mean_acc2,
                                                                                             train_mean_acc2_1,
@@ -381,12 +362,10 @@ for epoch in range(epochs):
                                                                                             train_mean_acc3_2,
                                                                                             time.time() - time1))
     step_t.append(epoch)  # 此步为更新迭代步数
-    loss1_plt.append(train_mean_loss1)
-    #loss2_plt.append(train_mean_loss2)
+    loss1_plt.append(train_mean_loss)
 
     try:
         loss1_lines.remove(loss1_lines[0])  # 移除上一步曲线
-        #loss2_lines.remove(loss2_lines[0])
     except Exception:
         pass
     loss1_lines = plt.plot(step_t, loss1_plt, 'r', lw=1)  # lw为曲线宽度
@@ -396,7 +375,7 @@ for epoch in range(epochs):
     plt.xlabel("epoch")
     plt.ylim(0, 2)
     plt.ylabel("loss")
-    plt.legend(["loss1"])
+    plt.legend(["loss"])
                 #,"loss2"])
     plt.pause(0.1)  # 图片停留0.1s
     plt.savefig("/home/yuy/code/transformer/analysis/dense/loss.png")
@@ -419,6 +398,7 @@ for epoch in range(epochs):
 
 
             pred1,pred2,pred3 = my_net(x,torch.tensor(dict_test_list[index_case_test]).to(device))
+            #pred1, pred2, pred3 = my_net(x)
             pred1 = pred1.max(dim = 1)
             pred2 = pred2.max(dim = 1)
             pred3 = pred3.max(dim = 1)
