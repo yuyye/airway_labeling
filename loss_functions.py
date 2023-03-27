@@ -4,6 +4,7 @@ Created on Mon Jun 28 20:56:10 2021
 
 @author: user
 """
+import numpy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -88,12 +89,8 @@ class LabelSmoothCrossEntropyLoss(nn.modules.loss._WeightedLoss):
         targets = LabelSmoothCrossEntropyLoss._smooth_one_hot(targets, inputs.size(-1),
                                                               self.smoothing)
         lsm = F.log_softmax(inputs, -1)
-        assert not (torch.isnan(lsm).sum() > 0),[print(inputs),print("nan!!!！！!")]
-        assert not (torch.isinf(lsm).sum() > 0),[print(inputs),print("inf!!!！！!")]
-        #print(lsm.shape, self.weight.shape)
 
         if self.weight is not None:
-            #lsm = lsm * self.weight.unsqueeze(0)
             lsm = lsm * self.weight.unsqueeze(1)
 
         loss = -(targets * lsm).sum(-1)
@@ -103,6 +100,65 @@ class LabelSmoothCrossEntropyLoss(nn.modules.loss._WeightedLoss):
         elif self.reduction == 'mean':
             loss = loss.mean()
 
-        # return loss+self.adr*self.w
+
         return loss
-        # return loss+h_loss*self.hw
+
+class DependenceLoss(nn.modules.loss._WeightedLoss):
+    def __init__(self, weight=None, reduction='mean', alpha = 0.001,p_loss1=1,p_loss2=1):
+        super().__init__(weight=weight, reduction=reduction)
+        self.alpha = alpha
+        self.p_loss1 = p_loss1
+        self.p_loss2 = p_loss2
+
+    @staticmethod
+    def _softargmax(input, beta=10000):
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        *_, n = input.shape
+        input = nn.functional.softmax(beta * input, dim=-1).to(device)
+        indices = torch.linspace(0, 1, n).to(device)
+        result = torch.sum((n - 1) * input * indices, dim=-1).to(device)
+        return result
+
+
+    def _check_consistence(self,previous_level:torch.Tensor, current_level:torch.Tensor,hierarchy_book):
+
+        with torch.no_grad():
+            current_pre = torch.ones_like(current_level)
+            for i in range(current_level.shape[0]):
+                current_pre[i] = hierarchy_book[int(current_level[i].item())]
+            #bool_tensor = [(previous_level[i]!= hierarchy_book[int(current_level[i].item())]).item() for i in range(current_level.shape[0])]
+            bool_tensor = [(previous_level[i] != current_pre[i]).item() for i in range(current_pre.shape[0])]
+            bool_tensor=numpy.array(bool_tensor)
+            bool_tensor[previous_level.cpu().numpy() == 18] = False
+            bool_tensor[previous_level.cpu().numpy() == 19] = False
+        #print("previous",previous_level,"cur_pre",current_pre,bool_tensor)
+
+        return torch.FloatTensor(bool_tensor)
+
+
+
+    def forward(self, out_pre,out_cur,label_pre,label_cur,hierarchy_book):
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        pred_pre = self._softargmax(out_pre).requires_grad_(True)
+        pred_cur = self._softargmax(out_cur).requires_grad_(True)
+
+        pred_cur.retain_grad()
+        pred_pre.retain_grad()
+
+
+        D_l = self._check_consistence(pred_pre, pred_cur,hierarchy_book).to(device)
+        function_s = nn.Sigmoid()
+
+        l_prev = 2 * (function_s(10000 * (pred_pre - label_pre).abs()) - 0.5).requires_grad_(True)
+        l_prev.retain_grad()
+
+        l_curr = 2 * (function_s(1000 * (pred_cur - label_cur).abs()) - 0.5).requires_grad_(True)
+        l_curr.retain_grad()
+        #print("pred_pre",pred_pre,"label_pre",label_pre,l_prev)
+        #print("pred_cur", pred_cur, "label_cur", label_cur,l_prev)
+
+        #dloss = self.alpha*torch.sum(torch.pow(self.p_loss1, D_l*l_prev)*torch.pow(self.p_loss2, D_l*l_curr) - 1)
+        dloss = self.alpha*torch.sum(torch.pow(self.p_loss1, D_l*l_prev)*torch.pow(self.p_loss2, D_l*l_curr) - 1)
+        dloss.requires_grad_(True)
+
+        return dloss

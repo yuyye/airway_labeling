@@ -4,10 +4,9 @@ Created on Tue Oct 18 15:26:37 2022
 
 @author: Yu
 """
-
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 import torch
 import torch.nn as nn
@@ -17,19 +16,25 @@ from torch_geometric.loader import DataLoader
 import torch_geometric.nn as pyg_nn
 import os
 import numpy as np
-from dataset import multitask_dataset
-from transformer_atten import AirwayFormer_att
-from loss_functions import LabelSmoothCrossEntropyLoss, DependenceLoss
-from utils import *
+from transformer_atten import AirwayFormer_att_new
+from torch_geometric.typing import OptTensor
+from torch_geometric.utils import scatter
 
-torch.manual_seed(222)  # cpu
-torch.cuda.manual_seed(222)  # gpu
-np.random.seed(222)  # numpy
+
+seed = 666
+alpha = 0.1
+torch.manual_seed(seed)  # cpu
+torch.cuda.manual_seed(seed)  # gpu
+np.random.seed(seed)  # numpy
 import time
 import shutil
 import sys
 import pickle
 import matplotlib.pyplot as plt
+sys.path.append("..")
+from dataset import multitask_dataset
+from loss_functions import LabelSmoothCrossEntropyLoss,DependenceLoss
+from utils import *
 
 
 def seg2lobor(y0):
@@ -88,22 +93,106 @@ def consistence(pred1, pred2, lable):
     mask = np.in1d(error1, error2, invert=True)
     ratio = np.sum(mask.astype(np.uint8)) / pred1.shape[0]
     return ratio
+def get_p(epoch):
+    '''if epoch<100:
+        p = (100-epoch)/100*0.2
+    else:
+        p = (epoch-100)/500*0.2'''
+    p = (800-epoch)/800*0.1
+    return p
+
+def to_adj(edge_index):
+    node_num = torch.max(edge_index)+1
+    adj = torch.zeros(node_num,node_num,device=edge_index.device)
+    for idx in range(edge_index.shape[1]):
+        adj[edge_index[0][idx]][edge_index[1][idx]] = 1
+        adj[edge_index[1][idx]][edge_index[0][idx]] = 1
+
+
+    adj = adj + torch.eye(node_num,device=edge_index.device)
+
+def to_adj_dir(edge_index):
+    node_num = torch.max(edge_index) + 1
+    adj = torch.zeros(node_num, node_num, device=edge_index.device)
+    for idx in range(edge_index.shape[1]):
+        adj[edge_index[0][idx]][edge_index[1][idx]] = 1
+
+    adj = adj + torch.eye(node_num, device=edge_index.device)
+
+    return adj
+
+def to_degree(adj):
+    node_num = adj.shape[0]
+    degree = torch.zeros(node_num, node_num, device=adj.device)
+    for idx in range(node_num):
+        degree[idx][idx] = pow(torch.sum(adj[idx]),-0.5)
+    return degree
+
+def to_degree_dir(adj):
+    node_num = adj.shape[0]
+    #adj = adj - torch.eye(node_num, device=adj.device)
+    degree_row = torch.zeros(node_num, node_num, device=adj.device)
+    degree_col = torch.zeros(node_num, node_num, device=adj.device)
+    for idx in range(node_num):
+        degree_row[idx][idx] = pow(torch.sum(adj[idx]),-0.5)
+        degree_col[idx][idx] = pow(torch.sum(adj[:, idx]), -0.5)
+    #degree = degree - torch.eye(node_num, device=degree.device)
+    return degree_row,degree_col
+
+def to_degree_row(adj):
+    node_num = adj.shape[0]
+    #adj = adj - torch.eye(node_num, device=adj.device)
+    degree = torch.zeros(node_num, node_num, device=adj.device)
+    for idx in range(node_num):
+        degree[idx][idx] = pow(torch.sum(adj[idx]),-1)
+    #degree = degree - torch.eye(node_num, device=degree.device)
+    return degree
+
+def to_degree_col(adj):
+    node_num = adj.shape[0]
+    #adj = adj - torch.eye(node_num, device=adj.device)
+    degree = torch.zeros(node_num, node_num, device=adj.device)
+    for idx in range(node_num):
+        degree[idx][idx] = pow(torch.sum(adj[:,idx]),-1)
+    #degree = degree - torch.eye(node_num, device=degree.device)
+    return degree
+
+def to_Anorm(A_hat,D_hat):
+    Tensor_l_DotProd = torch.matmul(D_hat, A_hat)
+    Anorm = torch.matmul(Tensor_l_DotProd, D_hat)
+    return Anorm
+
+def to_Arow(A_hat,D_hat): #A_row
+    Anorm = torch.matmul(D_hat, A_hat)
+    return Anorm
+
+def to_Acol(A_hat,D_hat):
+    Anorm = torch.matmul(A_hat,D_hat)
+    return Anorm
+
+def to_Adir(A_hat,D_row,D_col):
+    Tensor_l_DotProd = torch.matmul(D_row, A_hat)
+    Anorm = torch.matmul(Tensor_l_DotProd, D_col)
+    return Anorm
+
+
 
 
 train_path2 = "/home/yuy/code/data/graph_ht_pred_train_v6_v3/"
 test_path2 = "/home/yuy/code/data/graph_ht_pred_test_v6_v3/"
 train_path3 = "/home/yuy/code/data/graph_data_n_third_level_v3_train/"
 test_path3 = "/home/yuy/code/data/graph_data_n_third_level_v3_test_pred/"
-epochs = 600
+epochs = 800
+dataset1 = multitask_dataset(train_path2, train_path3, train=True)
+train_loader_case = DataLoader(dataset1, batch_size=1, shuffle=True, num_workers=0, pin_memory=True)
 
-dataset3 = multitask_dataset(train_path2, train_path3)
-train_loader_val = DataLoader(dataset3, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
 dataset2 = multitask_dataset(test_path2, test_path3, test=True)
-test_loader_case = DataLoader(dataset2, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
+test_loader_case = DataLoader(dataset2, batch_size=1, shuffle=True, num_workers=0, pin_memory=True)
+
 max_acc = 0
 # torch.set_default_dtype(torch.float64)
 
-save_dir = "checkpoints/att_transformer_6layer_dim128_heads4_hdim32_mlp256_postnorm_adam5e-4_eps_hierarchy222/"
+save_dir = "checkpoints/att_2_Gres_dir_norm_soft{}_dense_headmask_0.1_1_1_1_1_1_seed{}_transformer_6layer_dim128_heads4_hdim32_mlp256_postnorm_adam5e-4_eps_hierarchy222/".format(alpha,seed)
 if not os.path.exists(save_dir):
     os.makedirs(save_dir)
 logfile = os.path.join(save_dir, 'log')
@@ -117,8 +206,8 @@ if not os.path.exists(save_dir2):
     os.makedirs(save_dir2)
 
 # name = "checkpoints/dloss_hierachy_ploss_1_2/0100.ckpt"
-my_net = AirwayFormer_att(input_dim=23, num_classes1=6, num_classes2=20, num_classes3=127, dim=128, heads=4,
-                              mlp_dim=256, dim_head=32, dropout = 0., emb_dropout=0.)
+my_net = AirwayFormer_att_new(input_dim=23, num_classes1=6, num_classes2=20, num_classes3=127, dim=128, heads=4,
+                              mlp_dim=256, dim_head=32, dropout = 0., emb_dropout=0.,alpha = alpha)
 
 # checkpoint = torch.load(name)
 # my_net.load_state_dict(checkpoint['state_dict'])
@@ -129,18 +218,18 @@ loss1_plt = []  # 用于存放train_loss
 loss2_plt = []  # 用于存放train_loss
 train_mean_loss = 100
 
+step_acc = []
+acc_3_plt = []
+acc_2_plt = []
+acc_3_1_plt = []
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 my_net = my_net.to(device)
 # optimizer = torch.optim.SGD(my_net.parameters(), lr=1e-4, momentum=0.9)
 optimizer = torch.optim.Adam(my_net.parameters(), lr=5e-4, eps=1e-4)
 # scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[100,300], gamma=0.1)
-
-book = np.zeros(127)
-for j in range(127):
-    if j == 0:
-        book[j] = 18
-    else:
-        book[j] = (j - 1) // 7
+print("!!!!!!!!seed=!!!!!!!!",seed)
+print("!!!!!!!!alpha!!!!!!!!",alpha)
 
 for epoch in range(epochs):
     my_net.train()
@@ -181,8 +270,6 @@ for epoch in range(epochs):
     train_loss1 = []
     train_loss2 = []
     train_loss = []
-    dataset1 = multitask_dataset(train_path2, train_path3, train=True)
-    train_loader_case = DataLoader(dataset1, batch_size=1, shuffle=True, num_workers=0, pin_memory=True)
     for case in train_loader_case:
         trachea = loc_trachea(case.x)
         edge = case.edge_index.to(device)
@@ -197,14 +284,26 @@ for epoch in range(epochs):
         y_subseg = y_subseg.long()
 
         optimizer.zero_grad()
+        p = get_p(epoch)
+        A_hat= to_adj_dir(edge)
+        '''D_hat_1 = to_degree(A_hat)
+        A_norm_1 = to_Anorm(A_hat,D_hat_1)'''
+        #D_hat = to_degree_row(A_hat)
+        #A_norm = to_Arow(A_hat,D_hat)
+        D_row,D_col = to_degree_dir(A_hat)
+        A_norm = to_Adir(A_hat,D_row,D_col)
 
-        output11, output21, output31,output12, output22, output32 = my_net(x)
+
+
+
+
+        output11, output21, output31, output12,output22, output32 = my_net(x,A_norm.detach(),0.1)
 
         weights = case.weights.to(device)
         loss_function = LabelSmoothCrossEntropyLoss(weight=weights, smoothing=0.02)
         d_loss = DependenceLoss(weight=None, reduction='mean', alpha=0.01, p_loss1=1, p_loss2=2)
-        loss = loss_function(output11, y_lobar) + loss_function(output21, y_seg) + loss_function(output31, y_subseg)+\
-               loss_function(output12, y_lobar) + loss_function(output22, y_seg) + loss_function(output32, y_subseg)
+        loss =  loss_function(output11, y_lobar) +  loss_function(output21, y_seg) + loss_function(output31, y_subseg)+\
+              +  loss_function(output12, y_lobar) + loss_function(output22, y_seg) + loss_function(output32, y_subseg)
 
         # loss = loss_function(output1, y_lobar) + loss_function(output2, y_seg) + loss_function(output3, y_subseg)
 
@@ -216,7 +315,6 @@ for epoch in range(epochs):
         pred11 = output11.max(dim=1)
         label1 = y_lobar.cpu().data.numpy()
         pred11 = pred11[1].cpu().data.numpy()
-
         acc11 = np.sum((label1 == pred11).astype(np.uint8)) / (label1.shape[0])
         train_accuracy11.append(acc11)
         pred21 = output21.max(dim=1)
@@ -243,11 +341,10 @@ for epoch in range(epochs):
         train_accuracy3_21.append(acc3_21)
 
         pred12 = output12.max(dim=1)
-        label1 = y_lobar.cpu().data.numpy()
         pred12 = pred12[1].cpu().data.numpy()
-
         acc12 = np.sum((label1 == pred12).astype(np.uint8)) / (label1.shape[0])
         train_accuracy12.append(acc12)
+
         pred22 = output22.max(dim=1)
         label2 = y_seg.cpu().data.numpy()
         pred22 = pred22[1].cpu().data.numpy()
@@ -309,23 +406,21 @@ for epoch in range(epochs):
 
 
     print(
-        "epoch:{},loss:{}，acc:{}, {}({}), {}({}，{})time:{}".format(epoch + 1, train_mean_loss,
+        "epoch:{},loss:{}，acc:{}, {}({}), {}({}，{}), {},{}({}), {}({}, {})time:{}".format(epoch + 1, train_mean_loss,
                                                                    train_mean_acc11,
                                                                    train_mean_acc21,
                                                                    train_mean_acc2_11,
                                                                    train_mean_acc31,
                                                                    train_mean_acc3_11,
                                                                    train_mean_acc3_21,
-                                                                   time.time() - time1))
-    print(
-        "epoch:{},loss:{}，acc:{}, {}({}), {}({}，{}".format(epoch + 1, train_mean_loss,
                                                                    train_mean_acc12,
                                                                    train_mean_acc22,
                                                                    train_mean_acc2_12,
                                                                    train_mean_acc32,
                                                                    train_mean_acc3_12,
                                                                    train_mean_acc3_22,
-                                                                   ))
+                                                                   time.time() - time1))
+
     step_t.append(epoch)  # 此步为更新迭代步数
     loss1_plt.append(train_mean_loss)
     # loss2_plt.append(train_mean_loss2)
@@ -363,7 +458,15 @@ for epoch in range(epochs):
             y_subseg = case.y_subseg.to(device)
             y_subseg = y_subseg.long()
 
-            output11,output21,output31,output12,output22,output32 = my_net(x)
+            A_hat = to_adj_dir(edge)
+            '''D_hat = to_degree(A_hat)
+            A_norm = to_Anorm(A_hat,D_hat)'''
+            #D_hat = to_degree_row(A_hat)
+            #A_norm = to_Arow(A_hat,D_hat)
+            D_row, D_col = to_degree_dir(A_hat)
+            A_norm = to_Adir(A_hat, D_row, D_col)
+
+            output11,output21,output31,output12,output22,output32 = my_net(x,A_norm.detach(),0.)
             pred11 = output11.max(dim=1)
             label1 = y_lobar.cpu().data.numpy()
             pred11 = pred11[1].cpu().data.numpy()
@@ -392,11 +495,10 @@ for epoch in range(epochs):
             test_accuracy3_21.append(acc3_21)
 
             pred12 = output12.max(dim=1)
-            label1 = y_lobar.cpu().data.numpy()
             pred12 = pred12[1].cpu().data.numpy()
-
             acc12 = np.sum((label1 == pred12).astype(np.uint8)) / (label1.shape[0])
             test_accuracy12.append(acc12)
+
             pred22 = output22.max(dim=1)
             label2 = y_seg.cpu().data.numpy()
             pred22 = pred22[1].cpu().data.numpy()
@@ -439,7 +541,6 @@ for epoch in range(epochs):
         test_accuracy32 = np.array(test_accuracy32)
         test_accuracy3_22 = np.array(test_accuracy3_22)
         test_accuracy3_12 = np.array(test_accuracy3_12)
-
         test_mean_acc12 = np.mean(test_accuracy12)
         test_mean_acc22 = np.mean(test_accuracy22)
         test_mean_acc2_12 = np.mean(test_accuracy2_12)
@@ -447,7 +548,30 @@ for epoch in range(epochs):
         test_mean_acc3_22 = np.mean(test_accuracy3_22)
         test_mean_acc3_12 = np.mean(test_accuracy3_12)
 
+        step_acc.append(epoch)  # 此步为更新迭代步数
+        '''acc_3_plt.append(test_mean_acc32)
+        acc_2_plt.append(test_mean_acc22)
+        acc_3_1_plt.append(test_mean_acc31)
+        # loss2_plt.append(train_mean_loss2)
 
+        try:
+            acc3_lines.remove(acc3_lines[0])  # 移除上一步曲线
+            # loss2_lines.remove(loss2_lines[0])
+        except Exception:
+            pass
+        acc3_lines = plt.plot(step_acc, acc_3_plt, 'r', lw=1)  # lw为曲线宽度
+        acc2_lines = plt.plot(step_acc, acc_2_plt, 'g', lw=1)  # lw为曲线宽度
+        acc3_1_lines = plt.plot(step_acc, acc_3_1_plt, 'b', lw=1)  # lw为曲线宽度
+        # loss2_lines = plt.plot(step_t, loss2_plt, 'b', lw=1)
+
+        plt.title("acc")
+        plt.xlabel("epoch")
+        plt.ylim(0.7, 1.1)
+        plt.ylabel("acc")
+        plt.legend(["acc3_2","acc2_2","acc3_1"])
+        plt.pause(1)  # 图片停留1s
+        acc_path = os.path.join(save_dir, 'acc.png')
+        plt.savefig(acc_path)'''
 
         '''test_consist1_3 = np.array(test_consist1_3)
         test_consist2_3 = np.array(test_consist2_3)
@@ -458,13 +582,18 @@ for epoch in range(epochs):
         con_mean_3_1 = np.mean(test_consist3_1)
         con_mean_3_2 = np.mean(test_consist3_2)'''
         # print("Accuracy of Test Samples:{}, {}({}), {}({}，{}) r->w({},{}) w->r({},{})".format(mean_acc1,mean_acc2,mean_acc2_1,mean_acc3,mean_acc3_1,mean_acc3_2,con_mean_3_1,con_mean_3_2,con_mean_1_3,con_mean_2_3))
-        print("Accuracy of Test Samples:{}, {}({}), {}({}，{})".format(test_mean_acc11, test_mean_acc21,
+        print("Accuracy of Test Samples:{}, {}({}), {}({}，{}),{},{}({}), {}({}，{})".format(test_mean_acc11, test_mean_acc21,
                                                                       test_mean_acc2_11, test_mean_acc31,
-                                                                      test_mean_acc3_11, test_mean_acc3_21, ))
+                                                                      test_mean_acc3_11, test_mean_acc3_21,
+                                                                                           test_mean_acc12,
+                                                                                        test_mean_acc22,
+                                                                                        test_mean_acc2_12,
+                                                                                        test_mean_acc32,
+                                                                                        test_mean_acc3_12,
+                                                                                        test_mean_acc3_22,
+                                                                                        ))
 
-        print("Accuracy of Test Samples:{}, {}({}), {}({}，{})".format(test_mean_acc12, test_mean_acc22,
-                                                                      test_mean_acc2_12, test_mean_acc32,
-                                                                      test_mean_acc3_12, test_mean_acc3_22, ))
+
         if test_mean_acc32 > max_acc:
             max_acc = test_mean_acc32
             state_dict = my_net.state_dict()
@@ -475,7 +604,20 @@ for epoch in range(epochs):
                 'save_dir': save_dir,
                 'state_dict': state_dict},
                 os.path.join(save_dir, 'best.ckpt'))
-            print("best!!!!!!!!!!!")
+            print("!!!!!!!!!!!!!!!!!!!!!!best!!!!!!!!!!!!!!!!!!!!!!")
+            acc_save = np.array([test_mean_acc11, test_mean_acc21,
+                                                                      test_mean_acc2_11, test_mean_acc31,
+                                                                      test_mean_acc3_11, test_mean_acc3_21,
+                                                                                        test_mean_acc12,
+                                                                                        test_mean_acc22,
+                                                                                        test_mean_acc2_12,
+                                                                                        test_mean_acc32,
+                                                                                        test_mean_acc3_12,
+                                                                                        test_mean_acc3_22])
+
+            save_path = os.path.join(save_dir, 'acc.pkl')
+            with open(save_path, 'wb') as fo:  # 将数据写入pkl文件
+                pickle.dump(acc_save, fo)
 
     if (epoch + 1) % 100 == 0:
         state_dict = my_net.state_dict()
@@ -487,88 +629,5 @@ for epoch in range(epochs):
             'state_dict': state_dict},
             os.path.join(save_dir, '%04d.ckpt' % (epoch + 1)))
 
-my_net.eval()
-
-test_accuracy1 = []
-test_accuracy2 = []
-test_accuracy2_1 = []
-test_accuracy3 = []
-test_accuracy3_1 = []
-test_accuracy3_2 = []
-for case in test_loader_case:
-    trachea = loc_trachea(case.x)
-    edge = case.edge_index.to(device)
-    # x = case.x.type(torch.DoubleTensor).to(device)
-    x = case.x.to(device)
-    edge_prop = case.edge_attr
-    y_lobar = case.y_lobar.to(device)
-    y_lobar = y_lobar.long()
-    y_seg = case.y_seg.to(device)
-    y_seg = y_seg.long()
-    y_subseg = case.y_subseg.to(device)
-    y_subseg = y_subseg.long()
-
-    pred1, pred2, pred3 = my_net(x)
-    pred1 = pred1.max(dim=1)
-    pred2 = pred2.max(dim=1)
-    pred3 = pred3.max(dim=1)
-
-    label1 = y_lobar.cpu().data.numpy()
-    label2 = y_seg.cpu().data.numpy()
-    label3 = y_subseg.cpu().data.numpy()
-    pred1 = pred1[1].cpu().data.numpy()
-    acc1 = np.sum((label1 == pred1).astype(np.uint8)) / (y_lobar.shape[0])
-
-    pred2 = pred2[1].cpu().data.numpy()
-    pred2_1 = seg2lobor(pred2)
-    acc2 = np.sum((label2 == pred2).astype(np.uint8)) / (label2.shape[0])
-    acc2_1 = np.sum((label1 == pred2_1).astype(np.uint8)) / (label1.shape[0])
-
-    pred3 = pred3[1].cpu().data.numpy()
-    pred3_2 = subseg2seg(pred3, trachea)
-    pred3_1 = seg2lobor(pred3_2)
-    acc3 = np.sum((label3 == pred3).astype(np.uint8)) / (label3.shape[0])
-    acc3_2 = np.sum((label2 == pred3_2).astype(np.uint8)) / (label2.shape[0])
-    acc3_1 = np.sum((label1 == pred3_1).astype(np.uint8)) / (label1.shape[0])
-
-    '''con1_3 = consistence(pred1, pred3_1, label1)  # wrong->right
-    con2_3 = consistence(pred2, pred3_2, label2)
-    con3_1 = consistence(pred3_1, pred1, label1)  # right->wrong
-    con3_2 = consistence(pred3_2, pred2, label2)
-    test_consist1_3.append(con1_3)
-    test_consist2_3.append(con2_3)
-    test_consist3_1.append(con3_1)
-    test_consist3_2.append(con3_2)'''
-
-    test_accuracy1.append(acc1)
-    test_accuracy2.append(acc2)
-    test_accuracy2_1.append(acc2_1)
-    test_accuracy3.append(acc3)
-    test_accuracy3_1.append(acc3_1)
-    test_accuracy3_2.append(acc3_2)
-test_accuracy1 = np.array(test_accuracy1)
-test_accuracy2 = np.array(test_accuracy2)
-test_accuracy2_1 = np.array(test_accuracy2_1)
-test_accuracy3 = np.array(test_accuracy3)
-test_accuracy3_2 = np.array(test_accuracy3_2)
-test_accuracy3_1 = np.array(test_accuracy3_1)
-mean_acc1 = test_accuracy1.mean()
-mean_acc2 = test_accuracy2.mean()
-mean_acc2_1 = test_accuracy2_1.mean()
-mean_acc3 = test_accuracy3.mean()
-mean_acc3_2 = test_accuracy3_2.mean()
-mean_acc3_1 = test_accuracy3_1.mean()
-'''test_consist1_3 = np.array(test_consist1_3)
-test_consist2_3 = np.array(test_consist2_3)
-test_consist3_1 = np.array(test_consist3_1)
-test_consist3_2 = np.array(test_consist3_2)
-con_mean_1_3 = np.mean(test_consist1_3)
-con_mean_2_3 = np.mean(test_consist2_3)
-con_mean_3_1 = np.mean(test_consist3_1)
-con_mean_3_2 = np.mean(test_consist3_2)'''
-# print("Accuracy of Test Samples:{}, {}({}), {}({}，{}) r->w({},{}) w->r({},{})".format(mean_acc1,mean_acc2,mean_acc2_1,mean_acc3,mean_acc3_1,mean_acc3_2,con_mean_3_1,con_mean_3_2,con_mean_1_3,con_mean_2_3))
-print("Accuracy of Test Samples:{}, {}({}), {}({}，{})".format(mean_acc1, mean_acc2,
-                                                              mean_acc2_1, mean_acc3,
-                                                              mean_acc3_1, mean_acc3_2, ))
 
 

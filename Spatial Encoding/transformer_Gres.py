@@ -5,6 +5,7 @@ Created on Thu Dec 09 16:36:29 2022
 @author: yuy
 
 the attention map : subseg -> seg
+简化了transformer_att_new和transformer_att_Gres
 """
 
 import torch
@@ -66,7 +67,7 @@ class Attention(nn.Module):
             nn.Dropout(dropout)
         ) if project_out else nn.Identity()
 
-    def forward(self, x):
+    def forward(self, x, p):
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
 
@@ -77,11 +78,21 @@ class Attention(nn.Module):
         self.attentionmap = attn
         attn = self.dropout(attn)
 
+        mask = torch.ones_like(attn,requires_grad=False)
+        a = np.random.binomial(1, 1-p, size=mask.shape[1])
+        while np.sum(a) == 0:
+            a = np.random.binomial(1, 1 - p, size=mask.shape[1])
+        for i in range(mask.shape[1]):
+            if a[i] == 0:
+                mask[:,i,:,:] = 0
+
+        attn = attn*mask*mask.shape[1]/np.sum(a) #normalization
+
         out = torch.matmul(attn, v)
         out = rearrange(out, 'b h n d -> b n (h d)')
         return self.to_out(out)
 
-class Attention_att(nn.Module):
+class Attention_att(nn.Module):#use 分支2引入细粒度att
     def __init__(self, dim, heads=8, dim_head=64, dropout=0.):
         super().__init__()
         inner_dim = dim_head * heads
@@ -100,22 +111,37 @@ class Attention_att(nn.Module):
             nn.Dropout(dropout)
         ) if project_out else nn.Identity()
 
-    def forward(self, x, att):
+    def forward(self, x, att,p,alpha):#p drophead alpha 粗细粒度att加权合并
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
 
-        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale + att
+        #dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale + att
+        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        '''
+        dots = torch.matmul(q, k.transpose(-1, -2))
+        #矩阵归一化        
+        dots = F.normalize(att, p=2, dim=-1)*torch.norm(dots, p=2, dim=-1,keepdim=True) + dots
+        '''
 
-        attn = self.attend(dots)
+
+        attn = alpha*self.attend(dots)+(1-alpha)*self.attend(att)
 
         self.attentionmap = attn
         attn = self.dropout(attn)
+
+        mask = torch.ones_like(attn)
+        a = np.random.binomial(1, p, size=mask.shape[1])
+        for i in range(mask.shape[1]):
+            if a[i] == 1:
+                mask[:,i,:,:] = 0
+
+        attn = attn*mask
 
         out = torch.matmul(attn, v)
         out = rearrange(out, 'b h n d -> b n (h d)')
         return self.to_out(out)
 
-class Attention_give(nn.Module):
+class Attention_give(nn.Module):#use 分支1
     def __init__(self, dim, heads=8, dim_head=64, dropout=0.):
         super().__init__()
         inner_dim = dim_head * heads
@@ -134,7 +160,7 @@ class Attention_give(nn.Module):
             nn.Dropout(dropout)
         ) if project_out else nn.Identity()
 
-    def forward(self, x):
+    def forward(self, x, p):
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
 
@@ -144,48 +170,23 @@ class Attention_give(nn.Module):
 
         self.attentionmap = attn
         attn = self.dropout(attn)
+
+        mask = torch.ones_like(attn)
+        a = np.random.binomial(1, p, size=mask.shape[1])
+        for i in range(mask.shape[1]):
+            if a[i] == 1:
+                mask[:,i,:,:] = 0
+
+        attn = attn*mask
 
         out = torch.matmul(attn, v)
         out = rearrange(out, 'b h n d -> b n (h d)')
         return self.to_out(out),dots
 
-class Attention_att(nn.Module):
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.):
-        super().__init__()
-        inner_dim = dim_head * heads
-        project_out = not (heads == 1 and dim_head == dim)
-
-        self.heads = heads
-        self.scale = dim_head ** -0.5
-
-        self.attend = nn.Softmax(dim=-1)
-        self.dropout = nn.Dropout(dropout)
-
-        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
-
-        self.to_out = nn.Sequential(
-            nn.Linear(inner_dim, dim),
-            nn.Dropout(dropout)
-        ) if project_out else nn.Identity()
-
-    def forward(self, x, att):
-        qkv = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
-
-        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale + att
-
-        attn = self.attend(dots)
-
-        self.attentionmap = attn
-        attn = self.dropout(attn)
-
-        out = torch.matmul(attn, v)
-        out = rearrange(out, 'b h n d -> b n (h d)')
-        return self.to_out(out)
 
 
 
-class Transformer_postnorm_att(nn.Module):
+class Transformer_postnorm_att_Gres(nn.Module):#use 分支2接收att
     def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout=0.):
         super().__init__()
         self.norm = nn.LayerNorm(dim)
@@ -196,15 +197,15 @@ class Transformer_postnorm_att(nn.Module):
                 FeedForward(dim, mlp_dim, dropout=dropout)
             ]))
 
-    def forward(self, x,att):
+    def forward(self, x,A,att,p,alpha):
         for attn, ff in self.layers:
-            x = attn(x,att) + x
+            x = attn(x,att,p,alpha) +x
             x = self.norm(x)
-            x = ff(x) + x
+            x = ff(x) +torch.matmul(A,x)
             x = self.norm(x)
         return x
 
-class Transformer_postnorm(nn.Module):
+class Transformer_postnorm_Gres(nn.Module):#use 普通
     def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout=0.):
         super().__init__()
         self.norm = nn.LayerNorm(dim)
@@ -215,15 +216,15 @@ class Transformer_postnorm(nn.Module):
                 FeedForward(dim, mlp_dim, dropout=dropout)
             ]))
 
-    def forward(self, x):
+    def forward(self, x,A,p):
         for attn, ff in self.layers:
-            x = attn(x) + x
+            x = attn(x,p) +x
             x = self.norm(x)
-            x = ff(x) + x
+            x = ff(x)+torch.matmul(A,x)
             x = self.norm(x)
         return x
 
-class Transformer_postnorm_give(nn.Module):
+class Transformer_postnorm_give_Gres(nn.Module):#use 分支1
     def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout=0.):
         super().__init__()
         self.norm = nn.LayerNorm(dim)
@@ -235,197 +236,152 @@ class Transformer_postnorm_give(nn.Module):
             ]))
 
 
-    def forward(self, x):
+    def forward(self, x,A,p):
         for attn, ff in self.layers:
 
-            attn,give = attn(x)
-            x = attn + x
+            attn,give = attn(x,p)
+            x = attn+x
 
             x = self.norm(x)
-            x = ff(x) + x
+            x = ff(x) + torch.matmul(A,x)
             x = self.norm(x)
         return x, give
 
-class AirwayFormer_hierarchy(nn.Module):
-    def __init__(self, input_dim, num_classes1, num_classes2, num_classes3, dim, depth, heads, mlp_dim, dim_head=64,
-                 dropout=0., emb_dropout=0.):
-        super().__init__()
 
-        self.to_embedding = nn.Sequential(nn.Linear(input_dim, dim))
 
-        hierarchy = [2, 2, 2]
-        self.transformer = nn.ModuleList([])
-        for d in hierarchy:
-            self.transformer.append(
-                Transformer_postnorm(dim, d, heads, dim_head, mlp_dim, dropout)
-            )
 
-        self.mlp_head1 = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, num_classes1)
-        )
-        self.mlp_head2 = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, num_classes2)
-        )
-        self.mlp_head3 = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, num_classes3)
-        )
-
-    def forward(self, x):
-        x = self.to_embedding(x)
-        x = x.unsqueeze(0)
-
-        x_ = []
-        for former in self.transformer:
-            x = former(x)
-            x_.append(x)
-
-        x1 = self.mlp_head1(x_[0])
-        x1 = x1.squeeze(0)
-        x2 = self.mlp_head2(x_[1])
-        x2 = x2.squeeze(0)
-        x3 = self.mlp_head3(x_[2])
-        x3 = x3.squeeze(0)
-
-        return x1, x2, x3
-
-class AirwayFormer_give(nn.Module):
+class AirwayFormer_give_Gres(nn.Module):
     def __init__(self, input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
                  dropout=0., emb_dropout=0.):
         super().__init__()
 
-        self.to_embedding = nn.Sequential(nn.Linear(input_dim, dim))
 
         hierarchy = [2, 2, 2]
         self.transformer = nn.ModuleList([])
+        self.dense_linear = nn.ModuleList(
+            [nn.Linear((i+1) * dim, dim) for i in range(len(hierarchy))]
+        )
+        layer_num = 0
+        for d in hierarchy:
+            if layer_num != 0:
+                self.transformer.append(
+                    Transformer_postnorm_give_Gres(dim, d, heads, dim_head, mlp_dim, dropout)
+                )
+            else:
+                self.transformer.append(
+                    Transformer_postnorm_Gres(dim, d, heads, dim_head, mlp_dim, dropout)
+                )
+            layer_num += 1
+
+    def forward(self,x,A,p):
+
+        x_ = []
+
+        list = []
+        list.append(x)
+        give_list = []
+
+        for i in range(len(self.transformer)):
+            x = self.dense_linear[i](torch.cat(list, dim=-1))
+            if i == 0:
+                x = self.transformer[i](x, A, p)
+            else:
+                x, give = self.transformer[i](x, A, p)
+                give_list.append(give.detach())
+            x_.append(x)
+            list.append(x)
+
+        return x_[0], x_[1],x_[2],give_list
+
+
+class AirwayFormer_accept_Gres(nn.Module):#use
+    def __init__(self, input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
+                 dropout=0., emb_dropout=0.):
+        super().__init__()
+
+
+
+        hierarchy = [2, 2,2]
+        self.transformer = nn.ModuleList([])
+        self.dense_linear = nn.ModuleList(
+            [nn.Linear((i + 1) * dim, dim) for i in range(len(hierarchy))]
+        )
         layer_num = 0
         for d in hierarchy:
             if layer_num == 2:
                 self.transformer.append(
-                    Transformer_postnorm_give(dim, d, heads, dim_head, mlp_dim, dropout)
+                    Transformer_postnorm_Gres(dim, d, heads, dim_head, mlp_dim, dropout)
                 )
             else:
                 self.transformer.append(
-                    Transformer_postnorm(dim, d, heads, dim_head, mlp_dim, dropout)
+                    Transformer_postnorm_att_Gres(dim, d, heads, dim_head, mlp_dim, dropout)
                 )
             layer_num += 1
-        self.mlp_head1 = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, num_classes1)
-        )
-        self.mlp_head2 = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, num_classes2)
-        )
-        self.mlp_head3 = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, num_classes3)
-        )
 
-    def forward(self, x):
-        x = self.to_embedding(x)
-        x = x.unsqueeze(0)
 
+    def forward(self, x,A,att,p,alpha):
         x_ = []
-        layer_num = 0
-        for former in self.transformer:
-            if layer_num == 2:
-                x, give = former(x)
+        list = []
+
+        list.append(x)
+        for i in range(len(self.transformer)):
+            x = self.dense_linear[i](torch.cat(list, dim=-1))
+            if i == 2:
+                x = self.transformer[i](x,A, p)
             else:
-                x = former(x)
-            layer_num += 1
+                x = self.transformer[i](x, A,att[i], p,alpha)
             x_.append(x)
+            list.append(x)
 
-        x1 = self.mlp_head1(x_[0])
-        x1 = x1.squeeze(0)
-        x2 = self.mlp_head2(x_[1])
-        x2 = x2.squeeze(0)
-        x3 = self.mlp_head3(x_[2])
-        x3 = x3.squeeze(0)
-
-        return x1, x2, x3,give
-
-class AirwayFormer_accept(nn.Module):
+        return x_[0],x_[1],x_[2]
+class AirwayFormer_att_Gres(nn.Module):
     def __init__(self, input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
-                 dropout=0., emb_dropout=0.):
+                 dropout=0., emb_dropout=0.,alpha=0.):
         super().__init__()
 
-        self.to_embedding = nn.Sequential(nn.Linear(input_dim, dim))
-
-        hierarchy = [2, 2, 2]
-        self.transformer = nn.ModuleList([])
-        layer_num = 0
-        for d in hierarchy:
-            if layer_num == 1:
-                self.transformer.append(
-                    Transformer_postnorm_att(dim, d, heads, dim_head, mlp_dim, dropout)
-                )
-            else:
-                self.transformer.append(
-                    Transformer_postnorm(dim, d, heads, dim_head, mlp_dim, dropout)
-                )
-            layer_num += 1
-
-        self.mlp_head1 = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, num_classes1)
-        )
-        self.mlp_head2 = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, num_classes2)
-        )
-        self.mlp_head3 = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, num_classes3)
-        )
-
-    def forward(self, x,att):
-        x = self.to_embedding(x)
-        x = x.unsqueeze(0)
-
-        x_ = []
-        layer_num = 0
-        for former in self.transformer:
-            if layer_num == 1:
-                x = former(x,att)
-            else:
-                x = former(x)
-            layer_num += 1
-            x_.append(x)
-
-        x1 = self.mlp_head1(x_[0])
-        x1 = x1.squeeze(0)
-        x2 = self.mlp_head2(x_[1])
-        x2 = x2.squeeze(0)
-        x3 = self.mlp_head3(x_[2])
-        x3 = x3.squeeze(0)
-
-        return x1, x2, x3
-
-class AirwayFormer_att(nn.Module):
-    def __init__(self, input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
-                 dropout=0., emb_dropout=0.):
-        super().__init__()
-
-        self.accecpt = AirwayFormer_accept(input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
+        self.accecpt = AirwayFormer_accept_Gres(input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
                  dropout=0., emb_dropout=0.)
 
-        self.give = AirwayFormer_give(input_dim, num_classes1, num_classes2, num_classes3, dim, heads,
+        self.give = AirwayFormer_give_Gres(input_dim, num_classes1, num_classes2, num_classes3, dim, heads,
                                            mlp_dim, dim_head=64,
-                                           dropout=0., emb_dropout=0.)
+                                           dropout=0., emb_dropout=0.,)
+        self.mlp_head1 = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, num_classes1)
+        )
+        self.mlp_head2 = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, num_classes2)
+        )
+        self.mlp_head3 = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, num_classes3)
+        )
+        self.to_embedding = nn.Sequential(nn.Linear(input_dim, dim))
+        self.alpha = alpha
 
 
-    def forward(self, x):
-        x1_1, x2_1, x3_1, att = self.give(x)
-        x1_2, x2_2, x3_2 = self.accecpt(x,att)
+    def forward(self,x,A,p):
+        x = self.to_embedding(x)
+        x = x.unsqueeze(0)
 
 
+        x1_1, x2_1, x3_1, att = self.give(x,A,p)
+        x1_2, x2_2, x3_2 = self.accecpt(x,A,att,p,self.alpha)
 
-        return x1_1, x2_1, x3_1,x1_2, x2_2, x3_2
-
-
+        x1_1 = self.mlp_head1(x1_1)
+        x1_1 = x1_1.squeeze(0)
+        x2_1 = self.mlp_head2(x2_1)
+        x2_1 = x2_1.squeeze(0)
+        x3_1 = self.mlp_head3(x3_1)
+        x3_1= x3_1.squeeze(0)
+        x1_2 = self.mlp_head1(x1_2)
+        x1_2 = x1_2.squeeze(0)
+        x2_2 = self.mlp_head2(x2_2)
+        x2_2 = x2_2.squeeze(0)
+        x3_2 = self.mlp_head3(x3_2)
+        x3_2= x3_2.squeeze(0)
+        return x1_1, x2_1, x3_1, x1_2,x2_2, x3_2
 
 
 
