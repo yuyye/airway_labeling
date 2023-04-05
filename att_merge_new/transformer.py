@@ -193,14 +193,15 @@ class Transformer_postnorm_att_spd(nn.Module):#use 分支2接收att
         self.layers = nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                Attention_att_spd(dim, heads=heads, dim_head=dim_head, dropout=dropout),
+                Attention_spd(dim, heads=heads, dim_head=dim_head, dropout=dropout),
                 FeedForward(dim, mlp_dim, dropout=dropout)
             ]))
 
     def forward(self, x,spd,att,p,alpha):
         for attn, ff in self.layers:
-            x = attn(x,spd,att,p,alpha) + x
+            x = attn(x,spd,p) + x
             x = self.norm(x)
+            x = alpha*x + (1-alpha)*att
             x = ff(x) + x
             x = self.norm(x)
         return x
@@ -231,7 +232,7 @@ class Transformer_postnorm_give_spd(nn.Module):#use 分支1
         self.layers = nn.ModuleList([])
         for _ in range(depth ):
             self.layers.append(nn.ModuleList([
-                Attention_give_spd(dim, heads=heads, dim_head=dim_head, dropout=dropout),
+                Attention_spd(dim, heads=heads, dim_head=dim_head, dropout=dropout),
                 FeedForward(dim, mlp_dim, dropout=dropout)
             ]))
 
@@ -239,10 +240,11 @@ class Transformer_postnorm_give_spd(nn.Module):#use 分支1
     def forward(self, x,spd,p):
         for attn, ff in self.layers:
 
-            attn,give = attn(x,spd,p)
+            attn = attn(x,spd,p)
             x = attn + x
 
             x = self.norm(x)
+            give = x
             x = ff(x) + x
             x = self.norm(x)
         return x, give
