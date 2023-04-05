@@ -241,7 +241,6 @@ for epoch in range(epochs):
         y_seg = y_seg.long()
         y_subseg = case.y_subseg.to(device)
         y_subseg = y_subseg.long()
-        dict = case.dict.to(device)
         spd = case.spd.to(device)
         where_are_inf = torch.isinf(spd)
         # nan替换成0,inf替换成nan
@@ -420,7 +419,6 @@ for epoch in range(epochs):
             where_are_inf = torch.isinf(spd)
             # nan替换成0,inf替换成nan
             spd[where_are_inf] = 30
-            dict = case.dict.to(device)
 
             '''A_hat = to_adj(edge)
             D_hat = to_degree(A_hat)
