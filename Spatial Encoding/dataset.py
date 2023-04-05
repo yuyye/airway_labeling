@@ -220,11 +220,12 @@ def multitask_dataset(path2, path3,path_spd, train=False, test=False):
             print(file[i * 4])
     return dataset
 
-def multitask_dataset_hyper(path2, path3, train=False, test=False):
+def multitask_hg(path2, path3,train=False, test=False):
     file = os.listdir(path3)
     file.sort()
     num = len(file) // 5
     dataset = []
+    max = 0
 
     for i in range(num):
         edge = np.load(os.path.join(path3, file[i * 5]), allow_pickle=True)
@@ -236,19 +237,17 @@ def multitask_dataset_hyper(path2, path3, train=False, test=False):
         weight = np.ones(y_subseg.shape)
         y_seg = np.load(os.path.join(path2, file[i * 5 + 4]), allow_pickle=True)
         y_lobar = reduce_classes(y_seg)
+        trachea = loc_trachea(x)
 
-
-        pred = np.load(os.path.join(path2, file[i * 5 + 2]))
-
-        parse_num = 10
-        weight = np.ones(y_subseg.shape)
-
-        parent_map, children_map = parent_children_map(edge, x.shape[
-            0])  # parent_map N维，每个node的parents，children_map，N*N,a[i,j]=1说明j是i的child
+        parent_map, children_map = parent_children_map(edge, x.shape[0])
         hypertree = hyper_tree(parent_map, children_map)
-        hypergraph = hypergraph_airwaytree_sub(hypertree, children_map, pred, num=parse_num)
-        print(hypergraph.shape)
+        # hypergraph = hypergraph_airwaytree(hypertree, children_map, pred, num=15)
+        hypergraph = hypergraph_airwaytree_full(hypertree, children_map, trachea, num=40)
         A_hg = hyper_A(hypergraph)
+        A_hg = (torch.from_numpy(A_hg)).long()
+
+        dict_gen = generation_dict(x)
+        dict_gen = (torch.from_numpy(dict_gen)).long()
 
 
         edge_prop = (torch.from_numpy(edge_prop)).float()
@@ -259,10 +258,9 @@ def multitask_dataset_hyper(path2, path3, train=False, test=False):
         y_subseg = (torch.from_numpy(y_subseg)).float()
         y_seg = (torch.from_numpy(y_seg)).float()
         y_lobar = (torch.from_numpy(y_lobar)).float()
-        A_hg = (torch.from_numpy(A_hg)).long()
 
         data = Data(x=x, edge_index=edge_index, y_lobar=y_lobar, y_seg=y_seg, y_subseg=y_subseg, edge_attr=edge_prop,
-                    patient=patient, A_hg = A_hg,weights=weights)
+                    patient=patient, weights=weights,A_hg = A_hg,dict = dict_gen)
 
         if x.shape[0] == y_subseg.shape[0]:
             dataset.append(data)
@@ -271,6 +269,41 @@ def multitask_dataset_hyper(path2, path3, train=False, test=False):
     return dataset
 
 
+
+def loc_trachea(x):
+    idx = np.argmax(x[:,13])
+    return idx
+
+
+def hypergraph_airwaytree_full(hypertree, children_map, trachea, num=10):
+    hypertree = hypertree + np.eye(children_map.shape[0])
+    hypergraph = []
+    clique_lobar = children_map[trachea, :]
+    hypergraph.append(clique_lobar)
+    lobar_nodes = np.where(children_map[trachea, :] == 1)[0]
+    start_nodes = Queue()
+    for i in range(len(lobar_nodes)):
+        children = np.where(children_map[lobar_nodes[i], :] == 1)[0]
+        if children is not None:
+            for child in children:
+                if child not in lobar_nodes:
+                    start_nodes.put(child)
+                    hypertree[child, lobar_nodes[i]] = 1
+
+    while (not start_nodes.empty()):
+        cur = start_nodes.get()
+        hypergraph.append(hypertree[cur, :])
+        children = np.where(children_map[cur, :] == 1)[0]
+        if children is not None:
+            for child in children:
+                hypertree[child, cur] = 1
+                hypergraph.append(hypertree[child, :])
+                num_children = np.sum(hypertree[child, :])
+                if num_children > num:
+                    start_nodes.put(child)
+
+    hypergraph = np.array(hypergraph)
+    return hypergraph
 
 def prepare_dataset_subsegmental_hg_pred(path1, path2, node_weight=1, train=False,
                                          test=False):  # path1为seg，path2为subseg
@@ -464,6 +497,15 @@ def hyper_A(hypergraph):  # A[i,j]表示
             hyper_A[i, j] = (hypergraph[:, i] * hypergraph[:, j]).sum()
             hyper_A[j, i] = hyper_A[i, j]
     return hyper_A
+
+def generation_dict(x):
+    node_num = x.shape[0]
+    dict = np.zeros((node_num,node_num))
+    for i in range(node_num):
+        for j in range(node_num):
+            dict[i][j] = abs(x[i,0]-x[j,0])
+    return dict
+
 
 
 

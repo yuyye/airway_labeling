@@ -359,9 +359,9 @@ class AirwayFormer_att_se(nn.Module):
         )
         self.to_embedding = nn.Sequential(nn.Linear(input_dim, dim))
         self.alpha = alpha
-        self.spatial_pos_encoder1 = nn.Embedding(50, heads, padding_idx=0)
-        self.spatial_pos_encoder2 = nn.Embedding(50, heads, padding_idx=0)
-        self.spatial_pos_encoder3 = nn.Embedding(50, heads, padding_idx=0)
+        self.spatial_pos_encoder1 = nn.Embedding(30, heads, padding_idx=0)
+        self.spatial_pos_encoder2 = nn.Embedding(30, heads, padding_idx=0)
+        self.spatial_pos_encoder3 = nn.Embedding(30, heads, padding_idx=0)
         '''self.spatial_pos_encoder4 = nn.Embedding(50, heads, padding_idx=0)
         self.spatial_pos_encoder5 = nn.Embedding(50, heads, padding_idx=0)
         self.spatial_pos_encoder6 = nn.Embedding(50, heads, padding_idx=0)'''
@@ -411,7 +411,6 @@ class AirwayFormer_att_se(nn.Module):
         return x1_1, x2_1, x3_1, x1_2,x2_2, x3_2
 
 
-        return x_[0], x_[1],x_[2],give_list
 
 
 

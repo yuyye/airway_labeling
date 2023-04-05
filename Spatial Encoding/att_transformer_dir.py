@@ -7,7 +7,7 @@ Created on Tue Oct 18 15:26:37 2022
 import os
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
+#os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -21,7 +21,7 @@ from torch_geometric.typing import OptTensor
 from torch_geometric.utils import scatter
 
 
-seed = 222
+seed = 333
 alpha = 0.1
 torch.manual_seed(seed)  # cpu
 torch.cuda.manual_seed(seed)  # gpu
@@ -31,7 +31,7 @@ import shutil
 import sys
 import pickle
 import matplotlib.pyplot as plt
-from dataset import prepare_dataset_subsegmental_hg_pred
+from dataset import multitask_hg
 sys.path.append("..")
 from loss_functions import LabelSmoothCrossEntropyLoss
 from utils import *
@@ -140,17 +140,18 @@ spd_train = "/home/yuy/code/transformer/Spatial Encoding/spd_train/"
 spd_test = "/home/yuy/code/transformer/Spatial Encoding/spd_test/"
 epochs = 800
 #dataset1 = multitask_dataset(train_path2, train_path3, spd_train,train=True)
-dataset1 = prepare_dataset_subsegmental_hg_pred(train_path2, train_path3,train=True)
+dataset1 = multitask_hg(train_path2, train_path3,train=True)
 train_loader_case = DataLoader(dataset1, batch_size=1, shuffle=True, num_workers=0, pin_memory=True)
 
+
 #dataset2 = multitask_dataset(test_path2, test_path3, spd_test,test=True)
-dataset2 = prepare_dataset_subsegmental_hg_pred(test_path2, test_path3,test=True)
+dataset2 = multitask_hg(test_path2, test_path3,test=True)
 test_loader_case = DataLoader(dataset2, batch_size=1, shuffle=True, num_workers=0, pin_memory=True)
 
 max_acc = 0
 # torch.set_default_dtype(torch.float64)
 
-save_dir = "checkpoints/att_2_se_hyper_soft{}_dense_headmask_0.1_1_1_1_1_1_seed{}_transformer_6layer_dim128_heads4_hdim32_mlp256_postnorm_adam5e-4_eps_hierarchy222/".format(alpha,seed)
+save_dir = "checkpoints/att_2_gen_3stages_soft{}_dense_headmask_0.1_1_1_1_1_1_seed{}_transformer_6layer_dim128_heads4_hdim32_mlp256_postnorm_adam5e-4_eps_hierarchy222/".format(alpha,seed)
 if not os.path.exists(save_dir):
     os.makedirs(save_dir)
 logfile = os.path.join(save_dir, 'log')
@@ -240,21 +241,21 @@ for epoch in range(epochs):
         y_seg = y_seg.long()
         y_subseg = case.y_subseg.to(device)
         y_subseg = y_subseg.long()
+        dict = case.dict.to(device)
         '''spd = case.spd.to(device)
         where_are_inf = torch.isinf(spd)
         # nan替换成0,inf替换成nan
-        spd[where_are_inf] = 49'''
-        hyper = case.A_hg.to(device)
+        spd[where_are_inf] = 30'''
 
         optimizer.zero_grad()
         p = get_p(epoch)
-        A_hat = to_adj(edge)
+        '''A_hat = to_adj(edge)
         D_hat = to_degree(A_hat)
         A_norm = to_Anorm(A_hat,D_hat)
 
 
-        output11, output21, output31, output12,output22, output32 = my_net(x,hyper.detach(),0.1)
-        #output11, output21, output31, output12, output22, output32 = my_net(x, spd.detach(), 0.1)
+        output11, output21, output31, output12,output22, output32 = my_net(x,spd.detach(),A_norm.detach(),0.1)'''
+        output11, output21, output31, output12, output22, output32 = my_net(x, dict.detach(), 0.1)
 
         weights = case.weights.to(device)
         loss_function = LabelSmoothCrossEntropyLoss(weight=weights, smoothing=0.02)
@@ -413,19 +414,19 @@ for epoch in range(epochs):
             y_seg = y_seg.long()
             y_subseg = case.y_subseg.to(device)
             y_subseg = y_subseg.long()
+            #spd = case.A_hg.to(device)
             '''spd = case.spd.to(device)
-            spd = case.spd.to(device)
             where_are_inf = torch.isinf(spd)
             # nan替换成0,inf替换成nan
             spd[where_are_inf] = 30'''
-            hyper = case.A_hg.to(device)
+            dict = case.dict.to(device)
 
-            A_hat = to_adj(edge)
+            '''A_hat = to_adj(edge)
             D_hat = to_degree(A_hat)
             A_norm = to_Anorm(A_hat, D_hat)
 
-            output11,output21,output31,output12,output22,output32 = my_net(x,hyper.detach(),0.)
-            #output11, output21, output31, output12, output22, output32 = my_net(x, spd.detach(), 0.)
+            output11,output21,output31,output12,output22,output32 = my_net(x,spd.detach(),A_norm.detach(),0.)'''
+            output11, output21, output31, output12, output22, output32 = my_net(x, dict.detach(), 0.)
             pred11 = output11.max(dim=1)
             label1 = y_lobar.cpu().data.numpy()
             pred11 = pred11[1].cpu().data.numpy()
