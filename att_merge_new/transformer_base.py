@@ -48,7 +48,7 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 
-class Attention_spd(nn.Module):
+class Attention(nn.Module):
     def __init__(self, dim, heads=8, dim_head=64, dropout=0.):
         super().__init__()
         inner_dim = dim_head * heads
@@ -67,10 +67,10 @@ class Attention_spd(nn.Module):
             nn.Dropout(dropout)
         ) if project_out else nn.Identity()
 
-    def forward(self, x, spd,p):
+    def forward(self, x, p):
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
-        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale+spd
+        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
 
         attn = self.attend(dots)
 
@@ -91,156 +91,65 @@ class Attention_spd(nn.Module):
         out = rearrange(out, 'b h n d -> b n (h d)')
         return self.to_out(out)
 
-class Attention_att_spd(nn.Module):#use 分支2引入细粒度att
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.):
-        super().__init__()
-        inner_dim = dim_head * heads
-        project_out = not (heads == 1 and dim_head == dim)
-
-        self.heads = heads
-        self.scale = dim_head ** -0.5
-
-        self.attend = nn.Softmax(dim=-1)
-        self.dropout = nn.Dropout(dropout)
-
-        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
-
-        self.to_out = nn.Sequential(
-            nn.Linear(inner_dim, dim),
-            nn.Dropout(dropout)
-        ) if project_out else nn.Identity()
-
-    def forward(self, x,spd, att,p,alpha):#p drophead alpha 粗细粒度att加权合并
-        qkv = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
-
-        #dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale + att
-        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale + spd
-        '''
-        dots = torch.matmul(q, k.transpose(-1, -2))
-        #矩阵归一化        
-        dots = F.normalize(att, p=2, dim=-1)*torch.norm(dots, p=2, dim=-1,keepdim=True) + dots
-        '''
-
-
-        attn = alpha*self.attend(dots)+(1-alpha)*self.attend(att)
-
-        self.attentionmap = attn
-        attn = self.dropout(attn)
-
-        mask = torch.ones_like(attn)
-        a = np.random.binomial(1, p, size=mask.shape[1])
-        for i in range(mask.shape[1]):
-            if a[i] == 1:
-                mask[:,i,:,:] = 0
-
-        attn = attn*mask
-
-        out = torch.matmul(attn, v)
-        out = rearrange(out, 'b h n d -> b n (h d)')
-        return self.to_out(out)
-
-class Attention_give_spd(nn.Module):#use 分支1
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.):
-        super().__init__()
-        inner_dim = dim_head * heads
-        project_out = not (heads == 1 and dim_head == dim)
-
-        self.heads = heads
-        self.scale = dim_head ** -0.5
-
-        self.attend = nn.Softmax(dim=-1)
-        self.dropout = nn.Dropout(dropout)
-
-        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
-
-        self.to_out = nn.Sequential(
-            nn.Linear(inner_dim, dim),
-            nn.Dropout(dropout)
-        ) if project_out else nn.Identity()
-
-    def forward(self, x, spd,p):
-        qkv = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
-
-        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-        dots_new = dots + spd
-
-        attn = self.attend(dots_new)
-
-        self.attentionmap = attn
-        attn = self.dropout(attn)
-
-        mask = torch.ones_like(attn)
-        a = np.random.binomial(1, p, size=mask.shape[1])
-        for i in range(mask.shape[1]):
-            if a[i] == 1:
-                mask[:,i,:,:] = 0
-
-        attn = attn*mask
-
-        out = torch.matmul(attn, v)
-        out = rearrange(out, 'b h n d -> b n (h d)')
-        return self.to_out(out),dots
 
 
 
 
-class Transformer_postnorm_att_spd(nn.Module):#use 分支2接收att
+class Transformer_postnorm_att(nn.Module):#use 分支2接收att
     def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout=0.):
         super().__init__()
         self.norm = nn.LayerNorm(dim)
         self.layers = nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                Attention_spd(dim, heads=heads, dim_head=dim_head, dropout=dropout),
+                Attention(dim, heads=heads, dim_head=dim_head, dropout=dropout),
                 FeedForward(dim, mlp_dim, dropout=dropout)
             ]))
 
-    def forward(self, x,spd,att,p,alpha):
+    def forward(self, x,att,p,alpha):
         for attn, ff in self.layers:
-            x = attn(x,spd,p) + x
+            x = attn(x,p) + x
             x = self.norm(x)
             x = alpha * x + (1-alpha)*att
             x = ff(x) + x
             x = self.norm(x)
         return x
 
-class Transformer_postnorm_spd(nn.Module):#use 普通
+class Transformer_postnorm(nn.Module):#use 普通
     def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout=0.):
         super().__init__()
         self.norm = nn.LayerNorm(dim)
         self.layers = nn.ModuleList([])
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                Attention_spd(dim, heads=heads, dim_head=dim_head, dropout=dropout),
+                Attention(dim, heads=heads, dim_head=dim_head, dropout=dropout),
                 FeedForward(dim, mlp_dim, dropout=dropout)
             ]))
 
-    def forward(self, x,spd,p):
+    def forward(self, x,p):
         for attn, ff in self.layers:
-            x = attn(x,spd,p) + x
+            x = attn(x,p) + x
             x = self.norm(x)
             x = ff(x) + x
             x = self.norm(x)
         return x
 
-class Transformer_postnorm_give_spd(nn.Module):#use 分支1
+class Transformer_postnorm_give(nn.Module):#use 分支1
     def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout=0.):
         super().__init__()
         self.norm = nn.LayerNorm(dim)
         self.layers = nn.ModuleList([])
         for _ in range(depth ):
             self.layers.append(nn.ModuleList([
-                Attention_spd(dim, heads=heads, dim_head=dim_head, dropout=dropout),
+                Attention(dim, heads=heads, dim_head=dim_head, dropout=dropout),
                 FeedForward(dim, mlp_dim, dropout=dropout)
             ]))
 
 
-    def forward(self, x,spd,p):
+    def forward(self, x,p):
         for attn, ff in self.layers:
 
-            attn = attn(x,spd,p)
+            attn = attn(x,p)
             x = attn + x
 
             x = self.norm(x)
@@ -252,7 +161,7 @@ class Transformer_postnorm_give_spd(nn.Module):#use 分支1
 
 
 
-class AirwayFormer_give_spd(nn.Module):
+class AirwayFormer_give(nn.Module):
     def __init__(self, input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
                  dropout=0., emb_dropout=0.):
         super().__init__()
@@ -267,15 +176,15 @@ class AirwayFormer_give_spd(nn.Module):
         for d in hierarchy:
             if layer_num != 0:
                 self.transformer.append(
-                    Transformer_postnorm_give_spd(dim, d, heads, dim_head, mlp_dim, dropout)
+                    Transformer_postnorm_give(dim, d, heads, dim_head, mlp_dim, dropout)
                 )
             else:
                 self.transformer.append(
-                    Transformer_postnorm_spd(dim, d, heads, dim_head, mlp_dim, dropout)
+                    Transformer_postnorm(dim, d, heads, dim_head, mlp_dim, dropout)
                 )
             layer_num += 1
 
-    def forward(self,x,spd,p):
+    def forward(self,x,p):
 
         x_ = []
 
@@ -286,9 +195,9 @@ class AirwayFormer_give_spd(nn.Module):
         for i in range(len(self.transformer)):
             x = self.dense_linear[i](torch.cat(list, dim=-1))
             if i == 0:
-                x = self.transformer[i](x, spd[i],p)
+                x = self.transformer[i](x, p)
             else:
-                x, give = self.transformer[i](x,spd[i],p)
+                x, give = self.transformer[i](x,p)
                 give_list.append(give)#detach
             x_.append(x)
             list.append(x)
@@ -296,7 +205,7 @@ class AirwayFormer_give_spd(nn.Module):
         return x_[0], x_[1],x_[2],give_list
 
 
-class AirwayFormer_accept_spd(nn.Module):#use
+class AirwayFormer_accept(nn.Module):#use
     def __init__(self, input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
                  dropout=0., emb_dropout=0.):
         super().__init__()
@@ -312,16 +221,16 @@ class AirwayFormer_accept_spd(nn.Module):#use
         for d in hierarchy:
             if layer_num == 2:
                 self.transformer.append(
-                    Transformer_postnorm_spd(dim, d, heads, dim_head, mlp_dim, dropout)
+                    Transformer_postnorm(dim, d, heads, dim_head, mlp_dim, dropout)
                 )
             else:
                 self.transformer.append(
-                    Transformer_postnorm_att_spd(dim, d, heads, dim_head, mlp_dim, dropout)
+                    Transformer_postnorm_att(dim, d, heads, dim_head, mlp_dim, dropout)
                 )
             layer_num += 1
 
 
-    def forward(self, x,spd,att,p,alpha):
+    def forward(self, x,att,p,alpha):
         x_ = []
         list = []
 
@@ -329,22 +238,22 @@ class AirwayFormer_accept_spd(nn.Module):#use
         for i in range(len(self.transformer)):
             x = self.dense_linear[i](torch.cat(list, dim=-1))
             if i == 2:
-                x = self.transformer[i](x, spd[i],p)
+                x = self.transformer[i](x,p)
             else:
-                x = self.transformer[i](x, spd[i],att[i], p,alpha)
+                x = self.transformer[i](x, att[i], p,alpha)
             x_.append(x)
             list.append(x)
 
         return x_[0],x_[1],x_[2]
-class AirwayFormer_att_se(nn.Module):
+class AirwayFormer_att(nn.Module):
     def __init__(self, input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
                  dropout=0., emb_dropout=0.,alpha=0.):
         super().__init__()
 
-        self.accecpt = AirwayFormer_accept_spd(input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
+        self.accecpt = AirwayFormer_accept(input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
                  dropout=0., emb_dropout=0.)
 
-        self.give = AirwayFormer_give_spd(input_dim, num_classes1, num_classes2, num_classes3, dim, heads,
+        self.give = AirwayFormer_give(input_dim, num_classes1, num_classes2, num_classes3, dim, heads,
                                            mlp_dim, dim_head=64,
                                            dropout=0., emb_dropout=0.,)
         self.mlp_head1 = nn.Sequential(
@@ -370,33 +279,13 @@ class AirwayFormer_att_se(nn.Module):
 
 
 
-    def forward(self,x,spd,p):
+    def forward(self,x,p):
         x = self.to_embedding(x)
         x = x.unsqueeze(0)
-        dict = []
-        spd1 = spd.unsqueeze(0)
-        spd1 = self.spatial_pos_encoder1(spd1).permute(0, 3, 1, 2)
-        dict.append(spd1)
-        spd2 = spd.unsqueeze(0)
-        spd2 = self.spatial_pos_encoder2(spd2).permute(0, 3, 1, 2)
-        dict.append(spd2)
-        spd3 = spd.unsqueeze(0)
-        spd3 = self.spatial_pos_encoder3(spd3).permute(0, 3, 1, 2)
-        dict.append(spd3)
 
-        '''dict2 = []
-        spd4 = spd.unsqueeze(0)
-        spd4 = self.spatial_pos_encoder4(spd4).permute(0, 3, 1, 2)
-        dict2.append(spd4)
-        spd5 = spd.unsqueeze(0)
-        spd5 = self.spatial_pos_encoder5(spd5).permute(0, 3, 1, 2)
-        dict2.append(spd5)
-        spd6 = spd.unsqueeze(0)
-        spd6 = self.spatial_pos_encoder6(spd6).permute(0, 3, 1, 2)
-        dict2.append(spd6)'''
 
-        x1_1, x2_1, x3_1, att = self.give(x,dict,p)
-        x1_2, x2_2, x3_2 = self.accecpt(x,dict,att,p,self.alpha)
+        x1_1, x2_1, x3_1, att = self.give(x,p)
+        x1_2, x2_2, x3_2 = self.accecpt(x,att,p,self.alpha)
 
         x1_1 = self.mlp_head1(x1_1)
         x1_1 = x1_1.squeeze(0)

@@ -48,6 +48,50 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 
+class Attention(nn.Module):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0.):
+        super().__init__()
+        inner_dim = dim_head * heads
+        project_out = not (heads == 1 and dim_head == dim)
+
+        self.heads = heads
+        self.scale = dim_head ** -0.5
+
+        self.attend = nn.Softmax(dim=-1)
+        self.dropout = nn.Dropout(dropout)
+
+        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
+
+        self.to_out = nn.Sequential(
+            nn.Linear(inner_dim, dim),
+            nn.Dropout(dropout)
+        ) if project_out else nn.Identity()
+
+    def forward(self, x,p):
+        qkv = self.to_qkv(x).chunk(3, dim=-1)
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
+        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+
+        attn = self.attend(dots)
+
+        self.attentionmap = attn
+        attn = self.dropout(attn)
+
+        mask = torch.ones_like(attn,requires_grad=False)
+        a = np.random.binomial(1, 1-p, size=mask.shape[1])
+        while np.sum(a) == 0:
+            a = np.random.binomial(1, 1 - p, size=mask.shape[1])
+        for i in range(mask.shape[1]):
+            if a[i] == 0:
+                mask[:,i,:,:] = 0
+
+        attn = attn*mask*mask.shape[1]/np.sum(a) #normalization
+
+        out = torch.matmul(attn, v)
+        out = rearrange(out, 'b h n d -> b n (h d)')
+        return self.to_out(out)
+
+
 class Attention_spd(nn.Module):
     def __init__(self, dim, heads=8, dim_head=64, dropout=0.):
         super().__init__()
@@ -140,50 +184,6 @@ class Attention_att_spd(nn.Module):#use 分支2引入细粒度att
         out = rearrange(out, 'b h n d -> b n (h d)')
         return self.to_out(out)
 
-class Attention_give_spd(nn.Module):#use 分支1
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.):
-        super().__init__()
-        inner_dim = dim_head * heads
-        project_out = not (heads == 1 and dim_head == dim)
-
-        self.heads = heads
-        self.scale = dim_head ** -0.5
-
-        self.attend = nn.Softmax(dim=-1)
-        self.dropout = nn.Dropout(dropout)
-
-        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
-
-        self.to_out = nn.Sequential(
-            nn.Linear(inner_dim, dim),
-            nn.Dropout(dropout)
-        ) if project_out else nn.Identity()
-
-    def forward(self, x, spd,p):
-        qkv = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
-
-        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-        dots_new = dots + spd
-
-        attn = self.attend(dots_new)
-
-        self.attentionmap = attn
-        attn = self.dropout(attn)
-
-        mask = torch.ones_like(attn)
-        a = np.random.binomial(1, p, size=mask.shape[1])
-        for i in range(mask.shape[1]):
-            if a[i] == 1:
-                mask[:,i,:,:] = 0
-
-        attn = attn*mask
-
-        out = torch.matmul(attn, v)
-        out = rearrange(out, 'b h n d -> b n (h d)')
-        return self.to_out(out),dots
-
-
 
 
 class Transformer_postnorm_att_spd(nn.Module):#use 分支2接收att
@@ -191,20 +191,47 @@ class Transformer_postnorm_att_spd(nn.Module):#use 分支2接收att
         super().__init__()
         self.norm = nn.LayerNorm(dim)
         self.layers = nn.ModuleList([])
+        self.fine = FeedForward(dim, mlp_dim, dropout=dropout)
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
                 Attention_spd(dim, heads=heads, dim_head=dim_head, dropout=dropout),
                 FeedForward(dim, mlp_dim, dropout=dropout)
             ]))
 
-    def forward(self, x,spd,att,p,alpha):
+    def forward(self, x,spd,att,A,p,alpha):
         for attn, ff in self.layers:
             x = attn(x,spd,p) + x
             x = self.norm(x)
+            '''att =self.fine(att) + torch.matmul(A,att)
+            att = self.norm(att)'''
             x = alpha * x + (1-alpha)*att
             x = ff(x) + x
             x = self.norm(x)
         return x
+
+class Transformer_postnorm_tmp_spd(nn.Module):#use 分支2接收att
+    def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout=0.):
+        super().__init__()
+        self.norm = nn.LayerNorm(dim)
+        self.layers = nn.ModuleList([])
+        self.fine = FeedForward(dim, mlp_dim, dropout=dropout)
+        for _ in range(depth):
+            self.layers.append(nn.ModuleList([
+                Attention_spd(dim, heads=heads, dim_head=dim_head, dropout=dropout),
+                FeedForward(dim, mlp_dim, dropout=dropout)
+            ]))
+
+    def forward(self, x,spd,att,A,p,alpha):
+        for attn, ff in self.layers:
+            x = attn(x,spd,p) + x
+            x = self.norm(x)
+            give = x
+            '''att =self.fine(att) + torch.matmul(A,att)
+            att = self.norm(att)'''
+            x = alpha * x + (1-alpha)*att
+            x = ff(x) + x
+            x = self.norm(x)
+        return x,give
 
 class Transformer_postnorm_spd(nn.Module):#use 普通
     def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout=0.):
@@ -222,6 +249,25 @@ class Transformer_postnorm_spd(nn.Module):#use 普通
             x = attn(x,spd,p) + x
             x = self.norm(x)
             x = ff(x) + x
+            x = self.norm(x)
+        return x
+
+class Transformer_postnorm_Gres(nn.Module):#use 普通
+    def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout=0.):
+        super().__init__()
+        self.norm = nn.LayerNorm(dim)
+        self.layers = nn.ModuleList([])
+        for _ in range(depth):
+            self.layers.append(nn.ModuleList([
+                Attention(dim, heads=heads, dim_head=dim_head, dropout=dropout),
+                FeedForward(dim, mlp_dim, dropout=dropout)
+            ]))
+
+    def forward(self, x,A,p):
+        for attn, ff in self.layers:
+            x = attn(x,p) + x
+            x = self.norm(x)
+            x = ff(x) + torch.matmul(A,x)
             x = self.norm(x)
         return x
 
@@ -246,6 +292,30 @@ class Transformer_postnorm_give_spd(nn.Module):#use 分支1
             x = self.norm(x)
             give = x
             x = ff(x) + x
+            x = self.norm(x)
+        return x, give
+
+class Transformer_postnorm_give_Gres(nn.Module):#use 分支1
+    def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout=0.):
+        super().__init__()
+        self.norm = nn.LayerNorm(dim)
+        self.layers = nn.ModuleList([])
+        for _ in range(depth ):
+            self.layers.append(nn.ModuleList([
+                Attention(dim, heads=heads, dim_head=dim_head, dropout=dropout),
+                FeedForward(dim, mlp_dim, dropout=dropout)
+            ]))
+
+
+    def forward(self, x,A,p):
+        for attn, ff in self.layers:
+
+            attn = attn(x,p)
+            x = attn + x
+
+            x = self.norm(x)
+            give = x
+            x = ff(x) + torch.matmul(A,x)
             x = self.norm(x)
         return x, give
 
@@ -289,11 +359,55 @@ class AirwayFormer_give_spd(nn.Module):
                 x = self.transformer[i](x, spd[i],p)
             else:
                 x, give = self.transformer[i](x,spd[i],p)
-                give_list.append(give)#detach
+                give_list.append(give.detach())#detach
             x_.append(x)
             list.append(x)
 
         return x_[0], x_[1],x_[2],give_list
+
+class AirwayFormer_give_Gres(nn.Module):
+    def __init__(self, input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
+                 dropout=0., emb_dropout=0.):
+        super().__init__()
+
+
+        hierarchy = [2, 2, 2]
+        self.transformer = nn.ModuleList([])
+        self.dense_linear = nn.ModuleList(
+            [nn.Linear((i+1) * dim, dim) for i in range(len(hierarchy))]
+        )
+        layer_num = 0
+        for d in hierarchy:
+            if layer_num != 0:
+                self.transformer.append(
+                    Transformer_postnorm_give_Gres(dim, d, heads, dim_head, mlp_dim, dropout)
+                )
+            else:
+                self.transformer.append(
+                    Transformer_postnorm_Gres(dim, d, heads, dim_head, mlp_dim, dropout)
+                )
+            layer_num += 1
+
+    def forward(self,x,A,p):
+
+        x_ = []
+
+        list = []
+        list.append(x)
+        give_list = []
+
+        for i in range(len(self.transformer)):
+            x = self.dense_linear[i](torch.cat(list, dim=-1))
+            if i == 0:
+                x = self.transformer[i](x,A,p)
+            else:
+                x, give = self.transformer[i](x,A,p)
+                give_list.append(give.detach())#detach
+            x_.append(x)
+            list.append(x)
+
+        return x_[0], x_[1],x_[2],give_list
+
 
 
 class AirwayFormer_accept_spd(nn.Module):#use
@@ -321,7 +435,7 @@ class AirwayFormer_accept_spd(nn.Module):#use
             layer_num += 1
 
 
-    def forward(self, x,spd,att,p,alpha):
+    def forward(self, x,spd,att,A,p,alpha):
         x_ = []
         list = []
 
@@ -331,18 +445,145 @@ class AirwayFormer_accept_spd(nn.Module):#use
             if i == 2:
                 x = self.transformer[i](x, spd[i],p)
             else:
-                x = self.transformer[i](x, spd[i],att[i], p,alpha)
+                x = self.transformer[i](x, spd[i],att[i],A, p,alpha)
             x_.append(x)
             list.append(x)
 
         return x_[0],x_[1],x_[2]
-class AirwayFormer_att_se(nn.Module):
+
+class AirwayFormer_Gres_se(nn.Module):
     def __init__(self, input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
                  dropout=0., emb_dropout=0.,alpha=0.):
         super().__init__()
 
         self.accecpt = AirwayFormer_accept_spd(input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
                  dropout=0., emb_dropout=0.)
+
+        self.give = AirwayFormer_give_Gres(input_dim, num_classes1, num_classes2, num_classes3, dim, heads,
+                                           mlp_dim, dim_head=64,
+                                           dropout=0., emb_dropout=0.,)
+        self.mlp_head1 = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, num_classes1)
+        )
+        self.mlp_head2 = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, num_classes2)
+        )
+        self.mlp_head3 = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, num_classes3)
+        )
+        self.to_embedding = nn.Sequential(nn.Linear(input_dim, dim))
+        self.alpha = alpha
+        self.spatial_pos_encoder1 = nn.Embedding(30, heads, padding_idx=0)
+        self.spatial_pos_encoder2 = nn.Embedding(30, heads, padding_idx=0)
+        self.spatial_pos_encoder3 = nn.Embedding(30, heads, padding_idx=0)
+        '''self.spatial_pos_encoder4 = nn.Embedding(50, heads, padding_idx=0)
+        self.spatial_pos_encoder5 = nn.Embedding(50, heads, padding_idx=0)
+        self.spatial_pos_encoder6 = nn.Embedding(50, heads, padding_idx=0)'''
+
+
+
+    def forward(self,x,spd,A,p):
+        x = self.to_embedding(x)
+        x = x.unsqueeze(0)
+        dict = []
+        spd1 = spd.unsqueeze(0)
+        spd1 = self.spatial_pos_encoder1(spd1).permute(0, 3, 1, 2)
+        dict.append(spd1)
+        spd2 = spd.unsqueeze(0)
+        spd2 = self.spatial_pos_encoder2(spd2).permute(0, 3, 1, 2)
+        dict.append(spd2)
+        spd3 = spd.unsqueeze(0)
+        spd3 = self.spatial_pos_encoder3(spd3).permute(0, 3, 1, 2)
+        dict.append(spd3)
+
+        '''dict2 = []
+        spd4 = spd.unsqueeze(0)
+        spd4 = self.spatial_pos_encoder4(spd4).permute(0, 3, 1, 2)
+        dict2.append(spd4)
+        spd5 = spd.unsqueeze(0)
+        spd5 = self.spatial_pos_encoder5(spd5).permute(0, 3, 1, 2)
+        dict2.append(spd5)
+        spd6 = spd.unsqueeze(0)
+        spd6 = self.spatial_pos_encoder6(spd6).permute(0, 3, 1, 2)
+        dict2.append(spd6)'''
+
+        x1_1, x2_1, x3_1, att = self.give(x,A,p)
+        x1_2, x2_2, x3_2 = self.accecpt(x,dict,att,A,p,self.alpha)
+
+        x1_1 = self.mlp_head1(x1_1)
+        x1_1 = x1_1.squeeze(0)
+        x2_1 = self.mlp_head2(x2_1)
+        x2_1 = x2_1.squeeze(0)
+        x3_1 = self.mlp_head3(x3_1)
+        x3_1= x3_1.squeeze(0)
+        x1_2 = self.mlp_head1(x1_2)
+        x1_2 = x1_2.squeeze(0)
+        x2_2 = self.mlp_head2(x2_2)
+        x2_2 = x2_2.squeeze(0)
+        x3_2 = self.mlp_head3(x3_2)
+        x3_2= x3_2.squeeze(0)
+        return x1_1, x2_1, x3_1, x1_2,x2_2, x3_2
+
+
+
+
+class AirwayFormer_tmp_spd(nn.Module):#use
+    def __init__(self, input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
+                 dropout=0., emb_dropout=0.):
+        super().__init__()
+
+
+
+        hierarchy = [2, 2,2]
+        self.transformer = nn.ModuleList([])
+        self.dense_linear = nn.ModuleList(
+            [nn.Linear((i + 1) * dim, dim) for i in range(len(hierarchy))]
+        )
+        layer_num = 0
+
+        self.transformer.append(
+            Transformer_postnorm_att_spd(dim, hierarchy[0], heads, dim_head, mlp_dim, dropout)
+        )
+        self.transformer.append(
+            Transformer_postnorm_tmp_spd(dim, hierarchy[1], heads, dim_head, mlp_dim, dropout)
+        )
+        self.transformer.append(
+            Transformer_postnorm_give_spd(dim, hierarchy[2], heads, dim_head, mlp_dim, dropout)
+        )
+
+    def forward(self, x,spd,att,A,p,alpha):
+        x_ = []
+        list = []
+        give_list = []
+
+        list.append(x)
+        for i in range(len(self.transformer)):
+            x = self.dense_linear[i](torch.cat(list, dim=-1))
+            if i == 2:
+                x,give_sub = self.transformer[i](x, spd[i],p)
+            if i ==0:
+                x = self.transformer[i](x, spd[i],att[i],A, p,alpha)
+            if i ==1:
+                x,give_seg = self.transformer[i](x, spd[i],att[i],A, p,alpha)
+            x_.append(x)
+            list.append(x)
+        give_list.append(give_seg.detach())
+        give_list.append(give_sub.detach())
+
+        return x_[0],x_[1],x_[2],give_list
+class AirwayFormer_3stage_se(nn.Module):
+    def __init__(self, input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
+                 dropout=0., emb_dropout=0.,alpha=0.):
+        super().__init__()
+
+        self.accecpt = AirwayFormer_accept_spd(input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
+                 dropout=0., emb_dropout=0.)
+        self.tmp = AirwayFormer_tmp_spd(input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim,
+                                               dim_head=64,
+                                               dropout=0., emb_dropout=0.)
 
         self.give = AirwayFormer_give_spd(input_dim, num_classes1, num_classes2, num_classes3, dim, heads,
                                            mlp_dim, dim_head=64,
@@ -370,7 +611,7 @@ class AirwayFormer_att_se(nn.Module):
 
 
 
-    def forward(self,x,spd,p):
+    def forward(self,x,spd,A,p):
         x = self.to_embedding(x)
         x = x.unsqueeze(0)
         dict = []
@@ -395,8 +636,9 @@ class AirwayFormer_att_se(nn.Module):
         spd6 = self.spatial_pos_encoder6(spd6).permute(0, 3, 1, 2)
         dict2.append(spd6)'''
 
-        x1_1, x2_1, x3_1, att = self.give(x,dict,p)
-        x1_2, x2_2, x3_2 = self.accecpt(x,dict,att,p,self.alpha)
+        x1_1, x2_1, x3_1, att1 = self.give(x,dict,p)
+        x1_2, x2_2, x3_2,att2 = self.tmp(x, dict, att1, A, p, self.alpha)
+        x1_3, x2_3, x3_3 = self.accecpt(x,dict,att2,A,p,self.alpha)
 
         x1_1 = self.mlp_head1(x1_1)
         x1_1 = x1_1.squeeze(0)
@@ -410,11 +652,13 @@ class AirwayFormer_att_se(nn.Module):
         x2_2 = x2_2.squeeze(0)
         x3_2 = self.mlp_head3(x3_2)
         x3_2= x3_2.squeeze(0)
-        return x1_1, x2_1, x3_1, x1_2,x2_2, x3_2
-
-
-
-
+        x1_3 = self.mlp_head1(x1_3)
+        x1_3 = x1_3.squeeze(0)
+        x2_3 = self.mlp_head2(x2_3)
+        x2_3 = x2_3.squeeze(0)
+        x3_3 = self.mlp_head3(x3_3)
+        x3_3 = x3_3.squeeze(0)
+        return x1_1, x2_1, x3_1, x1_2,x2_2, x3_2,x1_3,x2_3, x3_3
 
 
 

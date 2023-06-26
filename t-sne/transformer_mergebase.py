@@ -1,11 +1,10 @@
+"/home/yuy/code/transformer/att_merge_new/checkpoints/att_merge_new_MHA_after_withFFGres_detach_3stages_soft0.8_seed666"
 # -*- coding: utf-8 -*-
 """
 Created on Thu Dec 09 16:36:29 2022
 
 @author: yuy
-
-the attention map : subseg -> seg
-简化了transformer_att_new和transformer_att_Gres
+att_merge_new_MHA_after_withFFGres_detach_3stages_soft0.8_seed666
 """
 
 import torch
@@ -191,16 +190,19 @@ class Transformer_postnorm_att_spd(nn.Module):#use 分支2接收att
         super().__init__()
         self.norm = nn.LayerNorm(dim)
         self.layers = nn.ModuleList([])
+        self.fine = FeedForward(dim, mlp_dim, dropout=dropout)
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
                 Attention_spd(dim, heads=heads, dim_head=dim_head, dropout=dropout),
                 FeedForward(dim, mlp_dim, dropout=dropout)
             ]))
 
-    def forward(self, x,spd,att,p,alpha):
+    def forward(self, x,spd,att,A,p,alpha):
         for attn, ff in self.layers:
             x = attn(x,spd,p) + x
             x = self.norm(x)
+            att =self.fine(att) + torch.matmul(A,att)
+            att = self.norm(att)
             x = alpha * x + (1-alpha)*att
             x = ff(x) + x
             x = self.norm(x)
@@ -289,7 +291,7 @@ class AirwayFormer_give_spd(nn.Module):
                 x = self.transformer[i](x, spd[i],p)
             else:
                 x, give = self.transformer[i](x,spd[i],p)
-                give_list.append(give)#detach
+                give_list.append(give.detach())#detach
             x_.append(x)
             list.append(x)
 
@@ -321,7 +323,7 @@ class AirwayFormer_accept_spd(nn.Module):#use
             layer_num += 1
 
 
-    def forward(self, x,spd,att,p,alpha):
+    def forward(self, x,spd,att,A,p,alpha):
         x_ = []
         list = []
 
@@ -331,7 +333,7 @@ class AirwayFormer_accept_spd(nn.Module):#use
             if i == 2:
                 x = self.transformer[i](x, spd[i],p)
             else:
-                x = self.transformer[i](x, spd[i],att[i], p,alpha)
+                x = self.transformer[i](x, spd[i],att[i],A, p,alpha)
             x_.append(x)
             list.append(x)
 
@@ -370,7 +372,7 @@ class AirwayFormer_att_se(nn.Module):
 
 
 
-    def forward(self,x,spd,p):
+    def forward(self,x,spd,A,p):
         x = self.to_embedding(x)
         x = x.unsqueeze(0)
         dict = []
@@ -396,9 +398,9 @@ class AirwayFormer_att_se(nn.Module):
         dict2.append(spd6)'''
 
         x1_1, x2_1, x3_1, att = self.give(x,dict,p)
-        x1_2, x2_2, x3_2 = self.accecpt(x,dict,att,p,self.alpha)
+        x1_2, x2_2, x3_2 = self.accecpt(x,dict,att,A,p,self.alpha)
 
-        x1_1 = self.mlp_head1(x1_1)
+        '''x1_1 = self.mlp_head1(x1_1)
         x1_1 = x1_1.squeeze(0)
         x2_1 = self.mlp_head2(x2_1)
         x2_1 = x2_1.squeeze(0)
@@ -409,10 +411,8 @@ class AirwayFormer_att_se(nn.Module):
         x2_2 = self.mlp_head2(x2_2)
         x2_2 = x2_2.squeeze(0)
         x3_2 = self.mlp_head3(x3_2)
-        x3_2= x3_2.squeeze(0)
+        x3_2= x3_2.squeeze(0)'''
         return x1_1, x2_1, x3_1, x1_2,x2_2, x3_2
-
-
 
 
 

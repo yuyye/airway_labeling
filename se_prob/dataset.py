@@ -196,12 +196,7 @@ def multitask_dataset(path2, path3,path_spd, train=False, test=False):
         weight = np.ones(y_subseg.shape)
         y_seg = np.load(os.path.join(path2, file[i * 5 + 4]), allow_pickle=True)
         y_lobar = reduce_classes(y_seg)
-        spd = np.array(np.load(path_spd+patient+"_spd.npy"))
-
-        spd = np.array(spd)
-        spd = np.where(spd > 29, 29, spd)
-        spd = torch.from_numpy(spd).long()
-
+        spd = np.load(path_spd+patient+"_spd.npy")
         if spd.max()>max:
             max = spd.max()
 
@@ -209,7 +204,8 @@ def multitask_dataset(path2, path3,path_spd, train=False, test=False):
         edge_prop = (torch.from_numpy(edge_prop)).float()
         edge_index = (torch.from_numpy(edge)).long()
         weights = (torch.from_numpy(weight)).float()
-        #spd = (torch.from_numpy(spd))
+        spd = (torch.from_numpy(spd)).long()
+
         x = (torch.from_numpy(x)).float()
         y_subseg = (torch.from_numpy(y_subseg)).float()
         y_seg = (torch.from_numpy(y_seg)).float()

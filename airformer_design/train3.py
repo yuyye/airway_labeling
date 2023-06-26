@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Tue Oct 18 15:26:37 2022
-
-@author: Yu
+三个分支
 """
 import os
 
@@ -16,13 +14,15 @@ from torch_geometric.loader import DataLoader
 import torch_geometric.nn as pyg_nn
 import os
 import numpy as np
-from transformer import AirwayFormer_att_se
+from transformer_3 import AirwayFormer_3stage_se
 from torch_geometric.typing import OptTensor
 from torch_geometric.utils import scatter
 
 
-seed = 555
-alpha = 0.4
+
+
+seed = 222
+alpha = 0.7
 torch.manual_seed(seed)  # cpu
 torch.cuda.manual_seed(seed)  # gpu
 np.random.seed(seed)  # numpy
@@ -151,7 +151,7 @@ test_loader_case = DataLoader(dataset2, batch_size=1, shuffle=True, num_workers=
 max_acc = 0
 # torch.set_default_dtype(torch.float64)
 
-save_dir = "checkpoints/att_merge_new_MHA_after_spdchange_withFFGres_3stages_soft{}_seed{}/".format(alpha,seed)
+save_dir = "checkpoints/att_merge_3branch_MHA_after_detach_3stages_soft{}_seed{}/".format(alpha,seed)
 if not os.path.exists(save_dir):
     os.makedirs(save_dir)
 logfile = os.path.join(save_dir, 'log')
@@ -165,7 +165,7 @@ if not os.path.exists(save_dir2):
     os.makedirs(save_dir2)
 
 # name = "checkpoints/dloss_hierachy_ploss_1_2/0100.ckpt"
-my_net = AirwayFormer_att_se(input_dim=23, num_classes1=6, num_classes2=20, num_classes3=127, dim=128, heads=4,
+my_net = AirwayFormer_3stage_se(input_dim=23, num_classes1=6, num_classes2=20, num_classes3=127, dim=128, heads=4,
                               mlp_dim=256, dim_head=32, dropout = 0., emb_dropout=0.,alpha = alpha)
 
 # checkpoint = torch.load(name)
@@ -242,23 +242,25 @@ for epoch in range(epochs):
         y_subseg = case.y_subseg.to(device)
         y_subseg = y_subseg.long()
         spd = case.spd.to(device)
-
+        where_are_inf = torch.isinf(spd)
+        # nan替换成0,inf替换成nan
+        spd[where_are_inf] = 30
 
         optimizer.zero_grad()
         p = get_p(epoch)
-        '''A_hat = to_adj(edge)
+        A_hat = to_adj(edge)
         D_hat = to_degree(A_hat)
         A_norm = to_Anorm(A_hat,D_hat)
 
 
-        output11, output21, output31, output12,output22, output32 = my_net(x,spd.detach(),A_norm.detach(),0.1)'''
-        output11, output21, output31, output12, output22, output32 = my_net(x, spd.detach(), 0.1)
-        #output11, output21, output31, output12, output22, output32 = my_net(x, dict.detach(), 0.1)
+        output11, output21, output31, output12,output22, output32,output13,output23, output33 = my_net(x,spd.detach(),A_norm.detach(),0.1)
+
 
         weights = case.weights.to(device)
         loss_function = LabelSmoothCrossEntropyLoss(weight=weights, smoothing=0.02)
         loss =  loss_function(output11, y_lobar) +  loss_function(output21, y_seg) + loss_function(output31, y_subseg)+\
-              +  loss_function(output12, y_lobar) + loss_function(output22, y_seg) + loss_function(output32, y_subseg)
+              +  loss_function(output12, y_lobar) + loss_function(output22, y_seg) + loss_function(output32, y_subseg)+\
+                loss_function(output13, y_lobar) + loss_function(output23, y_seg) + loss_function(output33, y_subseg)
 
         # loss = loss_function(output1, y_lobar) + loss_function(output2, y_seg) + loss_function(output3, y_subseg)
 
@@ -267,12 +269,12 @@ for epoch in range(epochs):
         loss.backward()
         # torch.nn.utils.clip_grad_norm_(parameters=my_net.parameters(), max_norm=10, norm_type=2)
 
-        pred11 = output11.max(dim=1)
+        pred11 = output12.max(dim=1)
         label1 = y_lobar.cpu().data.numpy()
         pred11 = pred11[1].cpu().data.numpy()
         acc11 = np.sum((label1 == pred11).astype(np.uint8)) / (label1.shape[0])
         train_accuracy11.append(acc11)
-        pred21 = output21.max(dim=1)
+        pred21 = output22.max(dim=1)
         label2 = y_seg.cpu().data.numpy()
         pred21 = pred21[1].cpu().data.numpy()
         pred2_11 = seg2lobor(pred21)
@@ -280,7 +282,7 @@ for epoch in range(epochs):
         acc2_11 = np.sum((label1 == pred2_11).astype(np.uint8)) / (label1.shape[0])
         train_accuracy21.append(acc21)
         train_accuracy2_11.append(acc2_11)
-        pred31 = output31.max(dim=1)
+        pred31 = output32.max(dim=1)
         label3 = y_subseg.cpu().data.numpy()
         pred31 = pred31[1].cpu().data.numpy()
         pred3_21 = subseg2seg(pred31, trachea)
@@ -295,12 +297,12 @@ for epoch in range(epochs):
         train_accuracy3_11.append(acc3_11)
         train_accuracy3_21.append(acc3_21)
 
-        pred12 = output12.max(dim=1)
+        pred12 = output13.max(dim=1)
         pred12 = pred12[1].cpu().data.numpy()
         acc12 = np.sum((label1 == pred12).astype(np.uint8)) / (label1.shape[0])
         train_accuracy12.append(acc12)
 
-        pred22 = output22.max(dim=1)
+        pred22 = output23.max(dim=1)
         label2 = y_seg.cpu().data.numpy()
         pred22 = pred22[1].cpu().data.numpy()
         pred2_12 = seg2lobor(pred22)
@@ -308,7 +310,7 @@ for epoch in range(epochs):
         acc2_12 = np.sum((label1 == pred2_12).astype(np.uint8)) / (label1.shape[0])
         train_accuracy22.append(acc22)
         train_accuracy2_12.append(acc2_12)
-        pred32 = output32.max(dim=1)
+        pred32 = output33.max(dim=1)
         label3 = y_subseg.cpu().data.numpy()
         pred32 = pred32[1].cpu().data.numpy()
         pred3_22 = subseg2seg(pred32, trachea)
@@ -414,21 +416,23 @@ for epoch in range(epochs):
             y_subseg = y_subseg.long()
             #spd = case.A_hg.to(device)
             spd = case.spd.to(device)
-
+            where_are_inf = torch.isinf(spd)
+            # nan替换成0,inf替换成nan
+            spd[where_are_inf] = 30
 
             A_hat = to_adj(edge)
             D_hat = to_degree(A_hat)
             A_norm = to_Anorm(A_hat, D_hat)
 
-            output11,output21,output31,output12,output22,output32 = my_net(x,spd.detach(),0.)
+            utput11, output21, output31, output12,output22, output32,output13,output23, output33 = my_net(x,spd.detach(),A_norm.detach(),0.)
             #output11, output21, output31, output12, output22, output32 = my_net(x, spd.detach(), 0.)
-            pred11 = output11.max(dim=1)
+            pred11 = output12.max(dim=1)
             label1 = y_lobar.cpu().data.numpy()
             pred11 = pred11[1].cpu().data.numpy()
 
             acc11 = np.sum((label1 == pred11).astype(np.uint8)) / (label1.shape[0])
             test_accuracy11.append(acc11)
-            pred21 = output21.max(dim=1)
+            pred21 = output22.max(dim=1)
             label2 = y_seg.cpu().data.numpy()
             pred21 = pred21[1].cpu().data.numpy()
             pred2_11 = seg2lobor(pred21)
@@ -436,7 +440,7 @@ for epoch in range(epochs):
             acc2_11 = np.sum((label1 == pred2_11).astype(np.uint8)) / (label1.shape[0])
             test_accuracy21.append(acc21)
             test_accuracy2_11.append(acc2_11)
-            pred31 = output31.max(dim=1)
+            pred31 = output32.max(dim=1)
             label3 = y_subseg.cpu().data.numpy()
             pred31 = pred31[1].cpu().data.numpy()
             pred3_21 = subseg2seg(pred31, trachea)
@@ -449,12 +453,12 @@ for epoch in range(epochs):
             test_accuracy3_11.append(acc3_11)
             test_accuracy3_21.append(acc3_21)
 
-            pred12 = output12.max(dim=1)
+            pred12 = output13.max(dim=1)
             pred12 = pred12[1].cpu().data.numpy()
             acc12 = np.sum((label1 == pred12).astype(np.uint8)) / (label1.shape[0])
             test_accuracy12.append(acc12)
 
-            pred22 = output22.max(dim=1)
+            pred22 = output23.max(dim=1)
             label2 = y_seg.cpu().data.numpy()
             pred22 = pred22[1].cpu().data.numpy()
             pred2_12 = seg2lobor(pred22)
@@ -462,7 +466,7 @@ for epoch in range(epochs):
             acc2_12 = np.sum((label1 == pred2_12).astype(np.uint8)) / (label1.shape[0])
             test_accuracy22.append(acc22)
             test_accuracy2_12.append(acc2_12)
-            pred32 = output32.max(dim=1)
+            pred32 = output33.max(dim=1)
             label3 = y_subseg.cpu().data.numpy()
             pred32 = pred32[1].cpu().data.numpy()
             pred3_22 = subseg2seg(pred32, trachea)

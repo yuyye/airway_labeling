@@ -6,7 +6,7 @@ Created on Tue Oct 18 15:26:37 2022
 """
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 #os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
 import torch
 import torch.nn as nn
@@ -22,7 +22,7 @@ from torch_geometric.utils import scatter
 
 
 seed = 555
-alpha = 0.4
+
 torch.manual_seed(seed)  # cpu
 torch.cuda.manual_seed(seed)  # gpu
 np.random.seed(seed)  # numpy
@@ -151,7 +151,7 @@ test_loader_case = DataLoader(dataset2, batch_size=1, shuffle=True, num_workers=
 max_acc = 0
 # torch.set_default_dtype(torch.float64)
 
-save_dir = "checkpoints/att_merge_new_MHA_after_spdchange_withFFGres_3stages_soft{}_seed{}/".format(alpha,seed)
+save_dir = "checkpoints/att_cross_norm_spdchange_3stages_seed{}/".format(seed)
 if not os.path.exists(save_dir):
     os.makedirs(save_dir)
 logfile = os.path.join(save_dir, 'log')
@@ -166,7 +166,7 @@ if not os.path.exists(save_dir2):
 
 # name = "checkpoints/dloss_hierachy_ploss_1_2/0100.ckpt"
 my_net = AirwayFormer_att_se(input_dim=23, num_classes1=6, num_classes2=20, num_classes3=127, dim=128, heads=4,
-                              mlp_dim=256, dim_head=32, dropout = 0., emb_dropout=0.,alpha = alpha)
+                              mlp_dim=256, dim_head=32, dropout = 0., emb_dropout=0.)
 
 # checkpoint = torch.load(name)
 # my_net.load_state_dict(checkpoint['state_dict'])
@@ -188,7 +188,6 @@ my_net = my_net.to(device)
 optimizer = torch.optim.Adam(my_net.parameters(), lr=5e-4, eps=1e-4)
 # scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[100,300], gamma=0.1)
 print("!!!!!!!!seed=!!!!!!!!",seed)
-print("!!!!!!!!alpha!!!!!!!!",alpha)
 
 for epoch in range(epochs):
     my_net.train()

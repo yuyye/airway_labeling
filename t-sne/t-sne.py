@@ -6,13 +6,14 @@ import numpy as np
 from dataset import multitask_dataset
 from torch_geometric.loader import DataLoader
 import os
+import sys
 import pickle
+from transformer_base import AirwayFormer_hierarchy
+sys.path.append("..")
 from utils import *
-sys.path.append("att_merge/")
-from transformer_atten import AirwayFormer_att_Gres
+
 '''sys.path.append("att_2_soft/")
 from transformer_att import AirwayFormer_att_new'''
-alpha = 0.1
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 def visual(feat):
@@ -30,7 +31,7 @@ def visual(feat):
     return x_final
 
 def plotlabels(S_lowDWeights, Trure_labels, name):
-    file_color = open("../a.txt", 'r')
+    file_color = open("a.txt", 'r')
     colors_file = []
     for line in file_color:
         colors_file.append(line.split())
@@ -78,32 +79,39 @@ def to_Anorm(A_hat,D_hat):
     return Anorm
 
 
+
 train_path2 = "/home/yuy/code/data/graph_ht_pred_train_v6_v3/"
 test_path2 = "/home/yuy/code/data/graph_ht_pred_test_v6_v3/"
 train_path3 = "/home/yuy/code/data/graph_data_n_third_level_v3_train/"
 test_path3 = "/home/yuy/code/data/graph_data_n_third_level_v3_test_pred/"
+spd_train = "/home/yuy/code/transformer/Spatial Encoding/spd_train/"
+spd_test = "/home/yuy/code/transformer/Spatial Encoding/spd_test/"
+epochs = 800
+dataset1 = multitask_dataset(train_path2, train_path3, spd_train, train=True)
+train_loader_case = DataLoader(dataset1, batch_size=1, shuffle=True, num_workers=0, pin_memory=True)
 
-dataset1 = multitask_dataset(train_path2, train_path3, train=True)
-train_loader_case = DataLoader(dataset1, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
+dataset2 = multitask_dataset(test_path2, test_path3, spd_test, test=True)
+test_loader_case = DataLoader(dataset2, batch_size=1, shuffle=True, num_workers=0, pin_memory=True)
 
-dataset2 = multitask_dataset(test_path2, test_path3, test=True)
-test_loader_case = DataLoader(dataset2, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
 feat_train = []
 feat_test = []
 # t-SNE的最终结果的降维与可视化
 save_dir = "t-sne/"
 if not os.path.exists(save_dir):
     os.makedirs(save_dir)
-
-my_net = AirwayFormer_att_Gres(input_dim=23, num_classes1=6, num_classes2=20, num_classes3=127, dim=128, heads=4,
-                                  mlp_dim=256, dim_head=32, dropout = 0., emb_dropout=0.,alpha = alpha)
+alpha = 0.8
+'''my_net = AirwayFormer_att_se(input_dim=23, num_classes1=6, num_classes2=20, num_classes3=127, dim=128, heads=4,
+                              mlp_dim=256, dim_head=32, dropout = 0., emb_dropout=0.,alpha = alpha)'''
+my_net = AirwayFormer_hierarchy(input_dim=23, num_classes1=6, num_classes2=20, num_classes3=127, dim=128, heads=4,
+                              mlp_dim=256, dim_head=32, dropout = 0., emb_dropout=0.)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 my_net = my_net.to(device)
 
-module_path = "/home/yuy/code/transformer/att_merge/checkpoints/att_2_soft0.1_dense_headmask_0.1_1_1_1_1_1_seed222_transformer_6layer_dim128_heads4_hdim32_mlp256_postnorm_adam5e-4_eps_hierarchy222/best.ckpt"
+#module_path = "/home/yuy/code/transformer/att_merge_new/checkpoints/att_merge_new_MHA_after_withFFGres_detach_3stages_soft0.8_seed666/best.ckpt"
+#module_path = "/home/yuy/code/transformer/airformer_design/checkpoints/baseline_spd_seed666/best.ckpt"
+module_path = "/home/yuy/code/transformer/baseline/checkpoints/hierarchy_seed666_transformer_6layer_dim128_heads4_hdim32_mlp256_postnorm_adam5e-4_eps_hierarchy222/best.ckpt"
 checkpoint = torch.load(module_path)
 my_net.load_state_dict(checkpoint['state_dict'])
-idx = 0
 '''for case in test_loader_case:
     idx += 1
     if idx != 3 :
@@ -123,16 +131,25 @@ idx = 0
     output32 = visual(output32)'''
 
 idx = 0
-for case in train_loader_case:
+for case in test_loader_case:
     x = case.x.to(device)
-    y = case.y_lobar
     edge = case.edge_index.to(device)
+    spd = case.spd.to(device)
+    where_are_inf = torch.isinf(spd)
+    # nan替换成0,inf替换成nan
+    spd[where_are_inf] = 30
+
     A_hat = to_adj(edge)
     D_hat = to_degree(A_hat)
-    A_norm = to_Anorm(A_hat, D_hat)
-    x_raw, output11, output21, output31, output12, output22, output32 = my_net(x, A_norm.detach(),0.)
+    A_norm = to_Anorm(A_hat,D_hat)
+
+
+    #output11, output21, output31, output12,output22, output32 = my_net(x,spd.detach(),A_norm.detach(),0.0)
+    #output1, output2, output3 = my_net(x, spd.detach(), 0.1)
+    x,output1, output2, output3 = my_net(x)
     #x_raw, output11, output21, output31, output12, output22, output32 = my_net(x, 0.)
-    out = x_raw.detach().cpu().numpy()[0]
+    out = output1.detach().cpu().numpy()[0]
+    y = case.y_seg
     idx += 1
     if idx ==1:
         arr_x = out
@@ -144,7 +161,10 @@ for case in train_loader_case:
     y_lobar = case.y_lobar
     y_seg = case.y_seg
     y_subseg = case.y_subseg
-plotlabels(visual(arr_x),arr_y,"the t-sne of x at lob level in trian-case")
+
+'''np.save("checkpoint/base/out3.npy",visual(arr_x))
+np.save("checkpoint/base/y_sub.npy",arr_y)'''
+plotlabels(visual(arr_x),arr_y,"the t-sne of out1 at seg level of base")
 
 
 '''label3 = y_subseg.cpu().data.numpy()

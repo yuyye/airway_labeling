@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 Created on Tue Oct 18 15:26:37 2022
-
+只有特征融合，没有spd等graph bias
 @author: Yu
 """
 import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 #os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
 import torch
 import torch.nn as nn
@@ -16,13 +16,13 @@ from torch_geometric.loader import DataLoader
 import torch_geometric.nn as pyg_nn
 import os
 import numpy as np
-from transformer import AirwayFormer_att_se
+from transformer_base import AirwayFormer_att
 from torch_geometric.typing import OptTensor
 from torch_geometric.utils import scatter
 
 
-seed = 555
-alpha = 0.4
+seed = 444
+alpha = 0.6
 torch.manual_seed(seed)  # cpu
 torch.cuda.manual_seed(seed)  # gpu
 np.random.seed(seed)  # numpy
@@ -151,7 +151,7 @@ test_loader_case = DataLoader(dataset2, batch_size=1, shuffle=True, num_workers=
 max_acc = 0
 # torch.set_default_dtype(torch.float64)
 
-save_dir = "checkpoints/att_merge_new_MHA_after_spdchange_withFFGres_3stages_soft{}_seed{}/".format(alpha,seed)
+save_dir = "checkpoints/att_merge_new_nospd_MHA_after_cat_seed{}/".format(alpha,seed)
 if not os.path.exists(save_dir):
     os.makedirs(save_dir)
 logfile = os.path.join(save_dir, 'log')
@@ -165,7 +165,7 @@ if not os.path.exists(save_dir2):
     os.makedirs(save_dir2)
 
 # name = "checkpoints/dloss_hierachy_ploss_1_2/0100.ckpt"
-my_net = AirwayFormer_att_se(input_dim=23, num_classes1=6, num_classes2=20, num_classes3=127, dim=128, heads=4,
+my_net = AirwayFormer_att(input_dim=23, num_classes1=6, num_classes2=20, num_classes3=127, dim=128, heads=4,
                               mlp_dim=256, dim_head=32, dropout = 0., emb_dropout=0.,alpha = alpha)
 
 # checkpoint = torch.load(name)
@@ -241,8 +241,10 @@ for epoch in range(epochs):
         y_seg = y_seg.long()
         y_subseg = case.y_subseg.to(device)
         y_subseg = y_subseg.long()
-        spd = case.spd.to(device)
-
+        '''spd = case.spd.to(device)
+        where_are_inf = torch.isinf(spd)
+        # nan替换成0,inf替换成nan
+        spd[where_are_inf] = 30'''
 
         optimizer.zero_grad()
         p = get_p(epoch)
@@ -252,7 +254,7 @@ for epoch in range(epochs):
 
 
         output11, output21, output31, output12,output22, output32 = my_net(x,spd.detach(),A_norm.detach(),0.1)'''
-        output11, output21, output31, output12, output22, output32 = my_net(x, spd.detach(), 0.1)
+        output11, output21, output31, output12, output22, output32 = my_net(x, 0.1)
         #output11, output21, output31, output12, output22, output32 = my_net(x, dict.detach(), 0.1)
 
         weights = case.weights.to(device)
@@ -360,7 +362,7 @@ for epoch in range(epochs):
 
 
 
-    print(
+    '''print(
         "epoch:{},loss:{}，acc:{}, {}({}), {}({}，{}), {},{}({}), {}({}, {})time:{}".format(epoch + 1, train_mean_loss,
                                                                    train_mean_acc11,
                                                                    train_mean_acc21,
@@ -374,7 +376,7 @@ for epoch in range(epochs):
                                                                    train_mean_acc32,
                                                                    train_mean_acc3_12,
                                                                    train_mean_acc3_22,
-                                                                   time.time() - time1))
+                                                                   time.time() - time1))'''
 
     step_t.append(epoch)  # 此步为更新迭代步数
     loss1_plt.append(train_mean_loss)
@@ -413,15 +415,17 @@ for epoch in range(epochs):
             y_subseg = case.y_subseg.to(device)
             y_subseg = y_subseg.long()
             #spd = case.A_hg.to(device)
-            spd = case.spd.to(device)
+            '''spd = case.spd.to(device)
+            where_are_inf = torch.isinf(spd)
+            # nan替换成0,inf替换成nan
+            spd[where_are_inf] = 30'''
 
-
-            A_hat = to_adj(edge)
+            '''A_hat = to_adj(edge)
             D_hat = to_degree(A_hat)
             A_norm = to_Anorm(A_hat, D_hat)
 
-            output11,output21,output31,output12,output22,output32 = my_net(x,spd.detach(),0.)
-            #output11, output21, output31, output12, output22, output32 = my_net(x, spd.detach(), 0.)
+            output11,output21,output31,output12,output22,output32 = my_net(x,spd.detach(),A_norm.detach(),0.)'''
+            output11, output21, output31, output12, output22, output32 = my_net(x, 0.)
             pred11 = output11.max(dim=1)
             label1 = y_lobar.cpu().data.numpy()
             pred11 = pred11[1].cpu().data.numpy()
@@ -537,7 +541,7 @@ for epoch in range(epochs):
         con_mean_3_1 = np.mean(test_consist3_1)
         con_mean_3_2 = np.mean(test_consist3_2)'''
         # print("Accuracy of Test Samples:{}, {}({}), {}({}，{}) r->w({},{}) w->r({},{})".format(mean_acc1,mean_acc2,mean_acc2_1,mean_acc3,mean_acc3_1,mean_acc3_2,con_mean_3_1,con_mean_3_2,con_mean_1_3,con_mean_2_3))
-        print("Accuracy of Test Samples:{}, {}({}), {}({}，{}),{},{}({}), {}({}，{})".format(test_mean_acc11, test_mean_acc21,
+        '''print("Accuracy of Test Samples:{}, {}({}), {}({}，{}),{},{}({}), {}({}，{})".format(test_mean_acc11, test_mean_acc21,
                                                                       test_mean_acc2_11, test_mean_acc31,
                                                                       test_mean_acc3_11, test_mean_acc3_21,
                                                                                            test_mean_acc12,
@@ -546,7 +550,7 @@ for epoch in range(epochs):
                                                                                         test_mean_acc32,
                                                                                         test_mean_acc3_12,
                                                                                         test_mean_acc3_22,
-                                                                                        ))
+                                                                                        ))'''
 
 
         if test_mean_acc32 > max_acc:
@@ -559,7 +563,20 @@ for epoch in range(epochs):
                 'save_dir': save_dir,
                 'state_dict': state_dict},
                 os.path.join(save_dir, 'best.ckpt'))
-            print("!!!!!!!!!!!!!!!!!!!!!!best!!!!!!!!!!!!!!!!!!!!!!")
+            #print("!!!!!!!!!!!!!!!!!!!!!!best!!!!!!!!!!!!!!!!!!!!!!")
+            print("Accuracy of Test Samples:{}, {}({}), {}({}，{}),{},{}({}), {}({}，{})".format(test_mean_acc11,
+                                                                                               test_mean_acc21,
+                                                                                               test_mean_acc2_11,
+                                                                                               test_mean_acc31,
+                                                                                               test_mean_acc3_11,
+                                                                                               test_mean_acc3_21,
+                                                                                               test_mean_acc12,
+                                                                                               test_mean_acc22,
+                                                                                               test_mean_acc2_12,
+                                                                                               test_mean_acc32,
+                                                                                               test_mean_acc3_12,
+                                                                                               test_mean_acc3_22,
+                                                                                               ))
             acc_save = np.array([test_mean_acc11, test_mean_acc21,
                                                                       test_mean_acc2_11, test_mean_acc31,
                                                                       test_mean_acc3_11, test_mean_acc3_21,

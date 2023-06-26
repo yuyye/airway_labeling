@@ -197,9 +197,9 @@ class Transformer_postnorm_att_spd(nn.Module):#use 分支2接收att
                 FeedForward(dim, mlp_dim, dropout=dropout)
             ]))
 
-    def forward(self, x,spd,att,p,alpha):
+    def forward(self, x,spd,att,A,p,alpha):
         for attn, ff in self.layers:
-            x = attn(x,spd,p) + x
+            x = attn(x,spd,p) + torch.matmul(A,x)
             x = self.norm(x)
             x = alpha * x + (1-alpha)*att
             x = ff(x) + x
@@ -217,11 +217,11 @@ class Transformer_postnorm_spd(nn.Module):#use 普通
                 FeedForward(dim, mlp_dim, dropout=dropout)
             ]))
 
-    def forward(self, x,spd,p):
+    def forward(self, x,spd,A,p):
         for attn, ff in self.layers:
-            x = attn(x,spd,p) + x
+            x = attn(x,spd,p) + torch.matmul(A,x)
             x = self.norm(x)
-            x = ff(x) + x
+            x = ff(x)
             x = self.norm(x)
         return x
 
@@ -237,11 +237,11 @@ class Transformer_postnorm_give_spd(nn.Module):#use 分支1
             ]))
 
 
-    def forward(self, x,spd,p):
+    def forward(self, x,spd,A,p):
         for attn, ff in self.layers:
 
             attn = attn(x,spd,p)
-            x = attn + x
+            x = attn + torch.matmul(A,x)
 
             x = self.norm(x)
             give = x
@@ -275,7 +275,7 @@ class AirwayFormer_give_spd(nn.Module):
                 )
             layer_num += 1
 
-    def forward(self,x,spd,p):
+    def forward(self,x,spd,A,p):
 
         x_ = []
 
@@ -286,10 +286,10 @@ class AirwayFormer_give_spd(nn.Module):
         for i in range(len(self.transformer)):
             x = self.dense_linear[i](torch.cat(list, dim=-1))
             if i == 0:
-                x = self.transformer[i](x, spd[i],p)
+                x = self.transformer[i](x, spd[i],A,p)
             else:
-                x, give = self.transformer[i](x,spd[i],p)
-                give_list.append(give)#detach
+                x, give = self.transformer[i](x,spd[i],A,p)
+                give_list.append(give.detach())#detach
             x_.append(x)
             list.append(x)
 
@@ -321,7 +321,7 @@ class AirwayFormer_accept_spd(nn.Module):#use
             layer_num += 1
 
 
-    def forward(self, x,spd,att,p,alpha):
+    def forward(self, x,spd,att,A,p,alpha):
         x_ = []
         list = []
 
@@ -329,14 +329,14 @@ class AirwayFormer_accept_spd(nn.Module):#use
         for i in range(len(self.transformer)):
             x = self.dense_linear[i](torch.cat(list, dim=-1))
             if i == 2:
-                x = self.transformer[i](x, spd[i],p)
+                x = self.transformer[i](x, spd[i],A,p)
             else:
-                x = self.transformer[i](x, spd[i],att[i], p,alpha)
+                x = self.transformer[i](x, spd[i],att[i],A, p,alpha)
             x_.append(x)
             list.append(x)
 
         return x_[0],x_[1],x_[2]
-class AirwayFormer_att_se(nn.Module):
+class AirwayFormer_att_se_Gres(nn.Module):
     def __init__(self, input_dim, num_classes1, num_classes2, num_classes3, dim, heads, mlp_dim, dim_head=64,
                  dropout=0., emb_dropout=0.,alpha=0.):
         super().__init__()
@@ -370,7 +370,7 @@ class AirwayFormer_att_se(nn.Module):
 
 
 
-    def forward(self,x,spd,p):
+    def forward(self,x,spd,A,p):
         x = self.to_embedding(x)
         x = x.unsqueeze(0)
         dict = []
@@ -395,8 +395,8 @@ class AirwayFormer_att_se(nn.Module):
         spd6 = self.spatial_pos_encoder6(spd6).permute(0, 3, 1, 2)
         dict2.append(spd6)'''
 
-        x1_1, x2_1, x3_1, att = self.give(x,dict,p)
-        x1_2, x2_2, x3_2 = self.accecpt(x,dict,att,p,self.alpha)
+        x1_1, x2_1, x3_1, att = self.give(x,dict,A,p)
+        x1_2, x2_2, x3_2 = self.accecpt(x,dict,att,A,p,self.alpha)
 
         x1_1 = self.mlp_head1(x1_1)
         x1_1 = x1_1.squeeze(0)

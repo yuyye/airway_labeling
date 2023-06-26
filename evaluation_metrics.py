@@ -17,7 +17,10 @@ from torch_geometric.loader import DataLoader
 import torch_geometric.nn as pyg_nn
 import os
 import numpy as np
-from transformer_spd import  AirwayFormer_att_se
+import sys
+#sys.path.append("att_merge_new/")
+#print(sys.path)
+from airformer_design.transformer import AirwayFormer_se
 
 seed = 333
 torch.manual_seed(seed)  # cpu
@@ -29,8 +32,8 @@ import sys
 import pickle
 import matplotlib.pyplot as plt
 
-sys.path.append("..")
-from dataset import multitask_dataset
+
+from att_merge_new.dataset import multitask_dataset
 from loss_functions import LabelSmoothCrossEntropyLoss, DependenceLoss
 from utils import *
 
@@ -147,7 +150,32 @@ def evaluation(label,pred):
     F1_mean = np.mean(F1)
     return RC_mean,PR_mean,F1_mean
 
+def to_adj(edge_index):
+    node_num = torch.max(edge_index)+1
+    adj = torch.zeros(node_num,node_num,device=edge_index.device)
+    for idx in range(edge_index.shape[1]):
+        adj[edge_index[0][idx]][edge_index[1][idx]] = 1
+        adj[edge_index[1][idx]][edge_index[0][idx]] = 1
 
+
+    adj = adj + torch.eye(node_num,device=edge_index.device)
+    return adj
+
+
+
+def to_degree(adj):
+    node_num = adj.shape[0]
+    degree = torch.zeros(node_num, node_num, device=adj.device)
+    for idx in range(node_num):
+        degree[idx][idx] = pow(torch.sum(adj[idx]),-0.5)
+    return degree
+
+
+
+def to_Anorm(A_hat,D_hat):
+    Tensor_l_DotProd = torch.matmul(D_hat, A_hat)
+    Anorm = torch.matmul(Tensor_l_DotProd, D_hat)
+    return Anorm
 
 
 train_path2 = "/home/yuy/code/data/graph_ht_pred_train_v6_v3/"
@@ -156,25 +184,33 @@ train_path3 = "/home/yuy/code/data/graph_data_n_third_level_v3_train/"
 test_path3 = "/home/yuy/code/data/graph_data_n_third_level_v3_test_pred/"
 spd_train = "/home/yuy/code/transformer/Spatial Encoding/spd_train/"
 spd_test = "/home/yuy/code/transformer/Spatial Encoding/spd_test/"
+epochs = 800
+dataset1 = multitask_dataset(train_path2, train_path3, spd_train,train=True)
+#dataset1 = multitask_hg(train_path2, train_path3,train=True)
+train_loader_case = DataLoader(dataset1, batch_size=1, shuffle=True, num_workers=0, pin_memory=True)
 
-dataset3 = multitask_dataset(train_path2, train_path3, spd_train,train=True)
-train_loader_val = DataLoader(dataset3, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
+
 dataset2 = multitask_dataset(test_path2, test_path3, spd_test,test=True)
-test_loader_case = DataLoader(dataset2, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
+#dataset2 = multitask_hg(test_path2, test_path3,test=True)
+test_loader_case = DataLoader(dataset2, batch_size=1, shuffle=True, num_workers=0, pin_memory=True)
+
 max_acc = 0
 # torch.set_default_dtype(torch.float64)
 
 
-seed = [222,333,444,555,666]
+seed = [333,444,555,666]
 Acc = []
 RC = []
 PR = []
 F1 = []
-for i in range(5):
-    name = "/home/yuy/code/transformer/Spatial Encoding/checkpoints/att_2_se_except_soft0.1_dense_headmask_0.1_1_1_1_1_1_seed{}_transformer_6layer_dim128_heads4_hdim32_mlp256_postnorm_adam5e-4_eps_hierarchy222/best.ckpt".format(seed[i])
-    my_net = AirwayFormer_att_se(input_dim=23, num_classes1=6, num_classes2=20, num_classes3=127, dim=128, heads=4,
-                              mlp_dim=256, dim_head=32, dropout = 0., emb_dropout=0.,alpha = 0.1)
-
+alpha = 0.4
+for i in range(4):
+    #name = "/home/yuy/code/transformer/Spatial Encoding/checkpoints/att_2_se_except_soft0.1_dense_headmask_0.1_1_1_1_1_1_seed{}_transformer_6layer_dim128_heads4_hdim32_mlp256_postnorm_adam5e-4_eps_hierarchy222/best.ckpt".format(seed[i])
+    #my_net = AirwayFormer_att_se(input_dim=23, num_classes1=6, num_classes2=20, num_classes3=127, dim=128, heads=4,
+                              #mlp_dim=256, dim_head=32, dropout = 0., emb_dropout=0.,alpha = 0.1)
+    name = "/home/yuy/code/transformer/airformer_design/checkpoints/baseline_spd_seed{}/best.ckpt".format(seed[i])
+    my_net = AirwayFormer_se(input_dim=23, num_classes1=6, num_classes2=20, num_classes3=127, dim=128, heads=4,
+                             mlp_dim=256, dim_head=32, dropout=0., emb_dropout=0.)
     checkpoint = torch.load(name)
     my_net.load_state_dict(checkpoint['state_dict'])
 
@@ -215,7 +251,14 @@ for i in range(5):
         where_are_inf = torch.isinf(spd)
         # nan替换成0,inf替换成nan
         spd[where_are_inf] = 30
-        _, _,_, pred1, pred2, pred3 = my_net(x, spd.detach(), 0.0)
+
+
+        A_hat = to_adj(edge)
+        D_hat = to_degree(A_hat)
+        A_norm = to_Anorm(A_hat,D_hat)
+
+
+        pred1,pred2,pred3 = my_net(x,spd.detach(),0.1)
 
         pred1 = pred1.max(dim=1)
         pred2 = pred2.max(dim=1)
@@ -240,8 +283,8 @@ for i in range(5):
         acc3_1 = np.sum((label1 == pred3_1).astype(np.uint8)) / (label1.shape[0])
 
 
-        RC1, PR1, F11 = evaluation(label1,pred1)
-        RC2, PR2, F12 = evaluation(label2, pred2)
+        RC1, PR1, F11 = evaluation(label1,pred1)#TODO
+        RC2, PR2, F12 = evaluation(label2, pred2)#TODO
         RC3, PR3, F13 = evaluation(label3, pred3)
         test_RC1.append(RC1)
         test_RC2.append(RC2)
@@ -265,8 +308,8 @@ for i in range(5):
         test_consist3_1.append(con3_1)
         test_consist3_2.append(con3_2)'''
 
-        test_accuracy1.append(acc1)
-        test_accuracy2.append(acc2)
+        test_accuracy1.append(acc1)#TODO
+        test_accuracy2.append(acc2)#TODO
         test_accuracy2_1.append(acc2_1)
         test_accuracy3.append(acc3)
         test_accuracy3_1.append(acc3_1)
