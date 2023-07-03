@@ -14,6 +14,7 @@ from torch import nn
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 import numpy as np
+import torch.nn.functional as F
 
 
 # helpers
@@ -70,7 +71,11 @@ class Attention_spd(nn.Module):
     def forward(self, x, spd,p):
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), qkv)
-        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale+spd
+        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale + spd
+        #attn = self.attend(dots + self.attend(dots/10000).detach() * spd)
+        #print(torch.median(self.attend(dots)))
+        #attn = self.attend(dots + F.normalize(dots * spd, p=2, dim=-1) * torch.norm(dots, p=2, dim=-1, keepdim=True))
+        #dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale + self.attend(torch.matmul(q, k.transpose(-1, -2)) * self.scale).detach() * spd
 
         attn = self.attend(dots)
 
@@ -110,19 +115,32 @@ class Attention_cross(nn.Module):
             nn.Dropout(dropout)
         ) if project_out else nn.Identity()
 
-    def forward(self, x1,x2):
+    def forward(self, x1,x2,spd,p):
         q = self.to_q(x1)
         q = rearrange(q,'b n (h d) -> b h n d', h=self.heads)
         kv = self.to_kv(x2).chunk(2, dim=-1)
         k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=self.heads), kv)
 
-        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale + spd
         attn = self.attend(dots)
         attn = self.dropout(attn)
+
+
+        mask = torch.ones_like(attn, requires_grad=False)
+        a = np.random.binomial(1, 1 - p, size=mask.shape[1])
+        while np.sum(a) == 0:
+            a = np.random.binomial(1, 1 - p, size=mask.shape[1])
+        for i in range(mask.shape[1]):
+            if a[i] == 0:
+                mask[:, i, :, :] = 0
+
+        attn = attn * mask * mask.shape[1] / np.sum(a)  # normalization
 
         out = torch.matmul(attn, v)
         out = rearrange(out, 'b h n d -> b n (h d)')
         return self.to_out(out)
+
+
 
 
 
@@ -144,7 +162,7 @@ class Transformer_postnorm_cross_spd(nn.Module):#use 分支2接收att
             x = self.norm(x)
             x = ff(x) + x
             x = self.norm(x)
-            x = self.cross(x,x2) + x
+            x = self.cross(x,x2,spd,p) + x
             x = self.norm(x)
         return x
 

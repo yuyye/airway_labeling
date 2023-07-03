@@ -151,7 +151,7 @@ test_loader_case = DataLoader(dataset2, batch_size=1, shuffle=True, num_workers=
 max_acc = 0
 # torch.set_default_dtype(torch.float64)
 
-save_dir = "checkpoints/att_cross_norm_spdchange_3stages_seed{}/".format(seed)
+save_dir = "checkpoints/att_cross_norm_correct_seed{}/".format(seed)
 if not os.path.exists(save_dir):
     os.makedirs(save_dir)
 logfile = os.path.join(save_dir, 'log')
