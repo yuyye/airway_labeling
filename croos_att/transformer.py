@@ -320,39 +320,30 @@ class AirwayFormer_att_se(nn.Module):
         )
         self.to_embedding = nn.Sequential(nn.Linear(input_dim, dim))
         self.alpha = alpha
-        self.spatial_pos_encoder1 = nn.Embedding(30, heads, padding_idx=0)
-        self.spatial_pos_encoder2 = nn.Embedding(30, heads, padding_idx=0)
-        self.spatial_pos_encoder3 = nn.Embedding(30, heads, padding_idx=0)
-        '''self.spatial_pos_encoder4 = nn.Embedding(50, heads, padding_idx=0)
-        self.spatial_pos_encoder5 = nn.Embedding(50, heads, padding_idx=0)
-        self.spatial_pos_encoder6 = nn.Embedding(50, heads, padding_idx=0)'''
+        self.spatial_pos_encoder1_spd = nn.Embedding(30, heads-2, padding_idx=0)
+        self.spatial_pos_encoder2_spd = nn.Embedding(30, heads-2, padding_idx=0)
+        self.spatial_pos_encoder3_spd = nn.Embedding(30, heads-2, padding_idx=0)
+
+        self.spatial_pos_encoder1_gen = nn.Embedding(30, 2, padding_idx=0)
+        self.spatial_pos_encoder2_gen = nn.Embedding(30, 2, padding_idx=0)
+        self.spatial_pos_encoder3_gen = nn.Embedding(30, 2, padding_idx=0)
 
 
 
-    def forward(self,x,spd,p):
+
+    def forward(self,x,spd,gen,p):
         x = self.to_embedding(x)
         x = x.unsqueeze(0)
+        gen = gen.unsqueeze(0)
+        spd = spd.unsqueeze(0)
         dict = []
-        spd1 = spd.unsqueeze(0)
-        spd1 = self.spatial_pos_encoder1(spd1).permute(0, 3, 1, 2)
-        dict.append(spd1)
-        spd2 = spd.unsqueeze(0)
-        spd2 = self.spatial_pos_encoder2(spd2).permute(0, 3, 1, 2)
-        dict.append(spd2)
-        spd3 = spd.unsqueeze(0)
-        spd3 = self.spatial_pos_encoder3(spd3).permute(0, 3, 1, 2)
-        dict.append(spd3)
+        dict1 = torch.cat((self.spatial_pos_encoder1_spd(spd),self.spatial_pos_encoder1_gen(gen)),-1).permute(0, 3, 1, 2)
+        dict.append(dict1)
+        dict2 = torch.cat((self.spatial_pos_encoder2_spd(spd),self.spatial_pos_encoder2_gen(gen)),-1).permute(0, 3, 1, 2)
+        dict.append(dict2)
+        dict3 = torch.cat((self.spatial_pos_encoder3_spd(spd),self.spatial_pos_encoder3_gen(gen)),-1).permute(0, 3, 1, 2)
+        dict.append(dict3)
 
-        '''dict2 = []
-        spd4 = spd.unsqueeze(0)
-        spd4 = self.spatial_pos_encoder4(spd4).permute(0, 3, 1, 2)
-        dict2.append(spd4)
-        spd5 = spd.unsqueeze(0)
-        spd5 = self.spatial_pos_encoder5(spd5).permute(0, 3, 1, 2)
-        dict2.append(spd5)
-        spd6 = spd.unsqueeze(0)
-        spd6 = self.spatial_pos_encoder6(spd6).permute(0, 3, 1, 2)
-        dict2.append(spd6)'''
 
         x1_1, x2_1, x3_1 = self.give(x,dict,p)
         x2 = [x2_1,x3_1]

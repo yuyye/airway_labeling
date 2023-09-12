@@ -21,7 +21,7 @@ from torch_geometric.typing import OptTensor
 from torch_geometric.utils import scatter
 
 
-seed = 555
+seed = 222
 
 torch.manual_seed(seed)  # cpu
 torch.cuda.manual_seed(seed)  # gpu
@@ -138,20 +138,21 @@ train_path3 = "/home/yuy/code/data/graph_data_n_third_level_v3_train/"
 test_path3 = "/home/yuy/code/data/graph_data_n_third_level_v3_test_pred/"
 spd_train = "/home/yuy/code/transformer/Spatial Encoding/spd_train/"
 spd_test = "/home/yuy/code/transformer/Spatial Encoding/spd_test/"
+dir_abs = "/home/yuy/code/data/spd/"
 epochs = 800
-dataset1 = multitask_dataset(train_path2, train_path3, spd_train,train=True)
+dataset1 = multitask_dataset(train_path2, train_path3, spd_train,dir_abs,train=True)
 #dataset1 = multitask_hg(train_path2, train_path3,train=True)
 train_loader_case = DataLoader(dataset1, batch_size=1, shuffle=True, num_workers=0, pin_memory=True)
 
 
-dataset2 = multitask_dataset(test_path2, test_path3, spd_test,test=True)
+dataset2 = multitask_dataset(test_path2, test_path3, spd_test,dir_abs,test=True)
 #dataset2 = multitask_hg(test_path2, test_path3,test=True)
 test_loader_case = DataLoader(dataset2, batch_size=1, shuffle=True, num_workers=0, pin_memory=True)
 
 max_acc = 0
 # torch.set_default_dtype(torch.float64)
 
-save_dir = "checkpoints/att_cross_norm_correct_seed{}/".format(seed)
+save_dir = "checkpoints/att_cross_norm_correct_spdgen22_seed{}/".format(seed)
 if not os.path.exists(save_dir):
     os.makedirs(save_dir)
 logfile = os.path.join(save_dir, 'log')
@@ -241,6 +242,7 @@ for epoch in range(epochs):
         y_subseg = case.y_subseg.to(device)
         y_subseg = y_subseg.long()
         spd = case.spd.to(device)
+        gen = case.gen.to(device)
 
 
         optimizer.zero_grad()
@@ -251,7 +253,7 @@ for epoch in range(epochs):
 
 
         output11, output21, output31, output12,output22, output32 = my_net(x,spd.detach(),A_norm.detach(),0.1)'''
-        output11, output21, output31, output12, output22, output32 = my_net(x, spd.detach(), 0.1)
+        output11, output21, output31, output12, output22, output32 = my_net(x, spd.detach(),gen.detach(), 0.1)
         #output11, output21, output31, output12, output22, output32 = my_net(x, dict.detach(), 0.1)
 
         weights = case.weights.to(device)
@@ -413,13 +415,14 @@ for epoch in range(epochs):
             y_subseg = y_subseg.long()
             #spd = case.A_hg.to(device)
             spd = case.spd.to(device)
+            gen = case.gen.to(device)
 
 
             A_hat = to_adj(edge)
             D_hat = to_degree(A_hat)
             A_norm = to_Anorm(A_hat, D_hat)
 
-            output11,output21,output31,output12,output22,output32 = my_net(x,spd.detach(),0.)
+            output11,output21,output31,output12,output22,output32 = my_net(x,spd.detach(),gen.detach(),0.)
             #output11, output21, output31, output12, output22, output32 = my_net(x, spd.detach(), 0.)
             pred11 = output11.max(dim=1)
             label1 = y_lobar.cpu().data.numpy()
